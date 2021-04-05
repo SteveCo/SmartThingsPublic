@@ -5,7 +5,7 @@
  *
  *  MyQ Lite
  *
- *  Copyright 2019 Jason Mok/Brian Beaird/Barry Burke/RBoy Apps
+ *  Copyright 2020 Jason Mok/Brian Beaird/Barry Burke/RBoy Apps
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -19,8 +19,8 @@
  */
 include 'asynchttp_v1'
 
-String appVersion() { return "3.1.0" }
-String appModified() { return "2019-10-18"}
+String appVersion() { return "3.1.5" }
+String appModified() { return "2021-01-05"}
 String appAuthor() { return "Brian Beaird" }
 String gitBranch() { return "brbeaird" }
 String getAppImg(imgName) 	{ return "https://raw.githubusercontent.com/${gitBranch()}/SmartThings_MyQ/master/icons/$imgName" }
@@ -96,6 +96,9 @@ def mainPage() {
             state.currentVersion.each { device, version ->
             	paragraph title: "", "${device} ${version} (${versionCompare(device)})"
             }
+            href(name: "Release notes", title: "Release notes",
+             required: false,
+             url: "https://github.com/${gitBranch()}/SmartThings_MyQ/blob/master/CHANGELOG.md")
             input "prefUpdateNotify", "bool", required: false, title: "Notify when new version is available"
         }
         section("Uninstall") {
@@ -106,7 +109,9 @@ def mainPage() {
 }
 
 def versionCompare(deviceName){
-    if (!state.currentVersion || !state.latestVersion){return 'checking...'}
+    if (!state.currentVersion || !state.latestVersion || state.latestVersion == [:]){
+        return 'latest'
+    }
     if (state.currentVersion[deviceName] == state.latestVersion[deviceName]){
     	return 'latest'
     }
@@ -268,14 +273,14 @@ def sensorPage() {
         state.validatedDoors.each{ door ->
             section("Setup options for " + state.MyQDataPending[door].name){
                 input "door${sensorCounter}Sensor",  "capability.contactSensor", required: false, multiple: false, title: state.MyQDataPending[door].name + " Contact Sensor"
-                input "prefDoor${sensorCounter}PushButtons", "bool", required: false, title: "Create on/off push buttons?"
+                input "prefDoor${sensorCounter}PushButtons", "bool", required: false, title: "Create separate on/off switches?"
             }
             sensorCounter++
         }
         section("Sensor setup"){
         	paragraph "For each door above, you can specify an optional sensor that allows the device type to know whether the door is open or closed. This helps the device function as a switch " +
             	"you can turn on (to open) and off (to close) in other automations and SmartApps."
-           	paragraph "Alternatively, you can choose the other option below to have separate additional On and Off push button devices created. This is recommened if you have no sensors but still want a way to open/close the " +
+           	paragraph "Alternatively, you can choose the other option below to have separate additional opener and closer switch devices created. This is recommened if you have no sensors but still want a way to open/close the " +
             "garage from SmartTiles and other interfaces like Google Home that can't function with the built-in open/close capability. See wiki for more details"
         }
     }
@@ -341,18 +346,29 @@ def getVersionInfo(oldVersion, newVersion){
     state.lastVersionCheck = now()
     log.info "Checking for latest version..."
     def params = [
-        uri:  'http://www.brbeaird.com/getVersion/myq/' + oldVersion + '/' + newVersion,
-        contentType: 'application/json'
+        uri:  'http://www.brbeaird.com/getVersion',
+        contentType: 'application/json',
+        body: [
+        	app: "myq",
+            platform: "ST",
+            prevVersion: oldVersion,
+            currentVersion: newVersion,
+        	sensor: door1Sensor ? true : false,
+            door: state.validatedDoors?.size(),
+            lock: prefUseLock ? true: false,
+            light: state.validatedLights?.size(),
+            button: prefDoor1PushButtons
+        ]
     ]
     def callbackMethod = oldVersion == 'versionCheck' ? 'updateCheck' : 'handleVersionUpdateResponse'
-    asynchttp_v1.get(callbackMethod, params)
+    asynchttp_v1.post(callbackMethod, params)
 }
 
 //When version response received (async), update state with the data
 def handleVersionUpdateResponse(response, data) {
-    if (response.hasError()) {
+    if (response.hasError() || !response.json?.SmartApp) {
         log.error "Error getting version info: ${response.errorMessage}"
-        sendNotificationEvent("Warning: problem getting MyQ version info: ${response.errorMessage}")
+        state.latestVersion = [:]
     }
     else {state.latestVersion = response.json}
 }
@@ -528,7 +544,7 @@ def verifyChildDeviceIds(){
 	//Try to match existing child devices with latest MyQ data
     childDevices.each { child ->
         def matchingId
-        if (child.typeName != 'Momentary Button Tile'){
+        if (child.typeName != 'Virtual Switch'){
             //Look for a matching entry in MyQ
             state.data.each { myQId, myQData ->
                 if (child.getMyQDeviceId() == myQId){
@@ -666,26 +682,28 @@ def createChilDevices(door, sensor, doorName, prefPushButtons){
             def existingCloseButtonDev = getChildDevice(door + " Closer")
             if (!existingOpenButtonDev){
                 try{
-                	def openButton = addChildDevice("smartthings", "Momentary Button Tile", door + " Opener", getHubID(), [name: doorName + " Opener", label: doorName + " Opener"])
+                	def openButton = addChildDevice("brbeaird", "Virtual Switch", door + " Opener", getHubID(), [name: doorName + " Opener", label: doorName + " Opener"])
+                    openButton.off()
                 	state.installMsg = state.installMsg + doorName + ": created push button device. \r\n\r\n"
-                	subscribe(openButton, "momentary.pushed", doorButtonOpenHandler)
+                	subscribe(openButton, "switch.on", doorButtonOpenHandler)
                 }
                 catch(physicalgraph.app.exception.UnknownDeviceTypeException e)
                 {
                     log.debug "Error! " + e
-                    state.installMsg = state.installMsg + doorName + ": problem creating push button device. Check your IDE to make sure the smartthings : Momentary Button Tile device handler is installed and published. \r\n\r\n"
+                    state.installMsg = state.installMsg + doorName + ": problem creating virtual switch device. Check your IDE to make sure the brbeaird : Virtual Switch device handler is installed and published. \r\n\r\n"
                 }
             }
             else{
-            	subscribe(existingOpenButtonDev, "momentary.pushed", doorButtonOpenHandler)
+            	subscribe(existingOpenButtonDev, "switch.on", doorButtonOpenHandler)
                 state.installMsg = state.installMsg + doorName + ": push button device already exists. Subscription recreated. \r\n\r\n"
                 log.debug "subscribed to button: " + existingOpenButtonDev
             }
 
             if (!existingCloseButtonDev){
                 try{
-                    def closeButton = addChildDevice("smartthings", "Momentary Button Tile", door + " Closer", getHubID(), [name: doorName + " Closer", label: doorName + " Closer"])
-                    subscribe(closeButton, "momentary.pushed", doorButtonCloseHandler)
+                    def closeButton = addChildDevice("brbeaird", "Virtual Switch", door + " Closer", getHubID(), [name: doorName + " Closer", label: doorName + " Closer"])
+                    closeButton.off()
+                    subscribe(closeButton, "switch.on", doorButtonCloseHandler)
                 }
                 catch(physicalgraph.app.exception.UnknownDeviceTypeException e)
                 {
@@ -693,7 +711,7 @@ def createChilDevices(door, sensor, doorName, prefPushButtons){
                 }
             }
             else{
-                subscribe(existingCloseButtonDev, "momentary.pushed", doorButtonCloseHandler)
+                subscribe(existingCloseButtonDev, "switch.on", doorButtonCloseHandler)
             }
         }
 
@@ -706,6 +724,7 @@ def createChilDevices(door, sensor, doorName, prefPushButtons){
             	log.debug "deleting button: " + it
                 try{
                 	deleteChildDevice(it.deviceNetworkId, true)
+                    state.installMsg = state.installMsg + "Removed ${it}. \r\n\r\n"
                 } catch (e){
                 	//sendPush("Warning: unable to delete virtual on/off push button - you'll need to manually remove it.")
                     state.installMsg = state.installMsg + "Warning: unable to delete virtual on/off push button - you'll need to manually remove it. \r\n\r\n"
@@ -758,10 +777,11 @@ def updateDoorStatus(doorDNI, sensor, child){
         //Get current sensor value
         def currentSensorValue = "unknown"
         currentSensorValue = sensor.latestValue("contact")
-        def currentDoorState = doorToUpdate.latestValue("contact")
+        def currentDoorState = doorToUpdate.latestValue("door")
+        doorToUpdate.updateSensorBattery(sensor.latestValue("battery"))
 
         //If sensor and door are out of sync, update the door
-		if (currentDoorState != currentSensorValue){
+		//if (currentDoorState != currentSensorValue){
         	log.debug "Updating ${doorName} as ${currentSensorValue} from sensor ${sensor}"
             doorToUpdate.updateDeviceStatus(currentSensorValue)
         	doorToUpdate.updateDeviceSensor("${sensor} is ${currentSensorValue}")
@@ -780,7 +800,7 @@ def updateDoorStatus(doorDNI, sensor, child){
             else{	//If the door has been inactive for more than a week, timestamp data will be null. Keep current value in that case.
             	timeStampLogText = "Door: " + doorName + ": Null timestamp detected "  + " -  from sensor " + sensor + " . Keeping current value."
             }
-        }
+       // }
     }catch (e) {
         log.debug "Error updating door: ${doorDNI}: ${e}"
     }
@@ -818,6 +838,7 @@ def doorButtonOpenHandler(evt) {
         log.debug "Opening door."
         doorDevice.openPrep()
         sendCommand(myQDeviceId, "open")
+        evt.getDevice().off()
     }catch(e){
     	def errMsg = "Warning: MyQ Open button command failed - ${e}"
         log.error errMsg
@@ -834,6 +855,7 @@ def doorButtonCloseHandler(evt) {
         log.debug "Closing door."
         doorDevice.closePrep()
         sendCommand(myQDeviceId, "close")
+        evt.getDevice().off()
 	}catch(e){
     	def errMsg = "Warning: MyQ Close button command failed - ${e}"
         log.error errMsg
@@ -868,7 +890,7 @@ private login() {
 }
 
 private doLogin() {
-    return apiPostLogin("/api/v5/Login", "{\"username\":\"${settings.username}\",\"password\": \"${settings.password}\"}" ) { response ->
+    return apiPostLogin("/api/v5/Login", "{\"Username\":\"${settings.username}\",\"Password\": \"${settings.password}\"}" ) { response ->
         if (response.data.SecurityToken != null) {
             state.session.securityToken = response.data.SecurityToken
             state.session.expiration = now() + (5*60*1000) // 5 minutes default
@@ -1025,7 +1047,7 @@ def getHubID(){
 
 /* API Methods */
 private getDevicesURL(){
-	return "/api/v5.1/Accounts/${state.session.accountId}/Devices"
+	return "/api/v5.1/accounts/${state.session.accountId}/devices"
 }
 
 private getAccountIdURL(){
@@ -1169,7 +1191,7 @@ private apiPostLogin(apiPath, apiBody = [], callback = {}) {
 // Send command to start or stop
 def sendCommand(myQDeviceId, command) {
 	state.lastCommandSent = now()
-    apiPut("/api/v5.1/Accounts/${state.session.accountId}/Devices/${myQDeviceId}/actions", "{\"action_type\":\"${command}\"}", "${state.data[myQDeviceId].name}(${command})")
+    apiPut("/api/v5.1/accounts/${state.session.accountId}/devices/${myQDeviceId}/actions", "{\"action_type\":\"${command}\"}", "${state.data[myQDeviceId].name}(${command})")
     return true
 }
 

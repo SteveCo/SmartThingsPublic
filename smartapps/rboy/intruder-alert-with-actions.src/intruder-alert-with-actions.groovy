@@ -20,14 +20,16 @@
  * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
  */ 
 
-def clientVersion() {
-    return "04.04.04"
-}
+def clientVersion() { return "04.05.01" }
 
 /**
  * Intruder Alert with Actions
  *
  * Copyright RBoy Apps, modification, reuse or redistribution of code is not allowed without permission
+ * 2020-07-29 - (v04.05.01) New app/platform improvements
+ * 2020-06-26 - (v04.04.07) Exit delay limit 1 to 5 minutes, entry delay 30 seconds to 5 minutes
+ * 2020-06-19 - (v04.04.06) Add support for Z-Wave keypad devices
+ * 2020-05-04 - (v04.04.05) Try to detect platform outage and prevent code upgrade spam notifications
  * 2020-03-20 - (v04.04.04) Fix for ST platform not disarming system on mode change sometimes
  * 2020-01-20 - (v04.04.03) Update icons for broken ST Android app 2.18
  * 2019-12-10 - (v04.04.02) Restore keypad armed state if set
@@ -87,7 +89,9 @@ definition(
 )
 
 preferences {
-    page(name: "mainPage")
+    page(name: "loginPage")
+    page(name: "loginPage2")
+    page(name: "setupApp")
     page(name: "armingPage")
     page(name: "alarmsPage")
     page(name: "operatingPage")
@@ -99,8 +103,50 @@ private getCountdownInterval() { 29 } // Announce every X seconds
 private getCheckInterval() { 1 } // Check for re-arm / dis-arm every 1 minute
 private getKeypadBeepDelay() { 3 } // Delays in second before starting keypad beep, to avoid conflict with other apps using SHM sync with keypad
 
-def mainPage() {
-    dynamicPage(name: "mainPage", title: "Intruder Alert with Alarms, Lights and Camera Pictures v${clientVersion()}", install: true, uninstall: true) {
+def loginPage() {
+    log.trace "Login page"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage", "loginPage2")
+    }
+}
+
+def loginPage2() {
+    log.trace "Login page2"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage2", "loginPage")
+    }
+}
+
+private loginSection(name, nextPage) {
+    dynamicPage(name: name, title: "Intruder Alert with Actions v${clientVersion()}", install: state.loginSuccess, uninstall: true, nextPage: state.loginSuccess ? "" : nextPage) {
+        section() {
+            if (state.loginError) {
+                log.warn "Authenticating failed: ${state.loginError}"
+                paragraph title: "Login failed", image: "https://www.rboyapps.com/images/RBoyApps.png", required: true, "${state.loginError}"
+            } else {
+                log.debug "Check authentication credentials, Login: $username"
+                paragraph title: "Login", image: "https://www.rboyapps.com/images/RBoyApps.png", required: false, "Enter your RBoy Apps username\nYou can retrieve your username from www.rboyapps.com lost password page"
+            }
+
+            input name: "username", type: "text", title: "Username", capitalization: "none", submitOnChange: false, required: false
+        }
+    }
+}
+
+def setupApp() {
+    dynamicPage(name: "setupApp", title: "Intruder Alert with Actions v${clientVersion()}", install: true, uninstall: true) {
         TimeZone timeZone = location.timeZone
         if (!timeZone) {
             timeZone = TimeZone.getDefault()
@@ -121,6 +167,9 @@ def mainPage() {
         section() {
             label title: "Assign a name for this SmartApp (optional)", required: false
             input name: "updateNotifications", title: "Check for app updates", type: "bool", defaultValue: true, required: false
+        }
+        section("Confidential", hideable: true, hidden: true) {
+            paragraph("RBoy Apps Username: " + (username?.toLowerCase() ?: "Unlicensed") + (state.loginSuccess ? "" : ", contact suppport"))
         }
     }
 }
@@ -148,7 +197,7 @@ def armingPage() {
         
         section("Delay Actions") {
             paragraph "Ignore intruder sensors while arming system and while residents are active for this duration"
-            input "residentsQuietThreshold", "number", title: "Exit delay (minutes)", required: false
+            input "residentsQuietThreshold", "number", title: "Exit delay (minutes)", range: "1..5", required: false
         }
     }
 }
@@ -175,7 +224,7 @@ def alarmsPage() {
 
         section("Delay Actions") {
             paragraph "Allow time to disarm before triggering intruder actions"
-            input "seconds", "number", title: "Entry delay (seconds)", required: false
+            input "seconds", "number", title: "Entry delay (seconds)", range: "30..300", required: false
         }
     }
 }
@@ -221,7 +270,7 @@ def notificationsPage() {
         section("Notifications") {
             paragraph "Enable to get arming/disarming/countdown delay and action notifications"
             input "armNotifications", "bool", title: "Get detailed notifications", required: false
-            input "keypads", "device.EnhancedZigbeeKeypadLock", title: "Beep keypad for entry/exit delays", multiple: true, required: false
+            input "keypads", "capability.lock", title: "Beep keypad for entry/exit delays", multiple: true, required: false
             input "textMessage", "text", title: "Intruder notification message", defaultValue: "Potential intruder detected", capitalization: "sentences", required: false
             input "audioMessage", "enum", title: "Intruder audio notification", description: "Speak", options: getAudioOptions(), required: false, submitOnChange: true
             if (audioMessage) {
@@ -591,19 +640,20 @@ private residentsHaveBeenQuiet() {
 }
 
 def setKeypadDelay(data) {
-    if (keypads) {
+    def supportedKeypads = keypads?.findAll{ it.hasAttribute("armMode") } // Get all supported keypads
+    if (supportedKeypads) {
         switch (data?.type) {
             case "exit":
                 state.lastKeypadModes = [:]
-                keypads.each { keypad -> state.lastKeypadModes[keypad.id] = keypad.currentValue("armMode") as String } // Save the last keypad states so we can restore them later
-                keypads*.setExitDelay(residentsQuietThreshold * 60) // Start exit delay beeping
-                log.debug "Starting exit delay beeping for $keypads, saved states ${state.lastKeypadModes}"
+                supportedKeypads.each { keypad -> state.lastKeypadModes[keypad.id] = keypad.currentValue("armMode") as String } // Save the last keypad states so we can restore them later
+                supportedKeypads*.setExitDelay(residentsQuietThreshold * 60) // Start exit delay beeping
+                log.debug "Starting exit delay beeping for $supportedKeypads, saved states ${state.lastKeypadModes}"
             	break
             case "entry":
                 state.lastKeypadModes = [:]
-                keypads.each { keypad -> state.lastKeypadModes[keypad.id] = keypad.currentValue("armMode") as String } // Save the last keypad states so we can restore them later
-                keypads*.setEntryDelay(seconds) // Start entry delay beeping
-                log.debug "Starting entry delay beeping for $keypads, saved states ${state.lastKeypadModes}"
+                supportedKeypads.each { keypad -> state.lastKeypadModes[keypad.id] = keypad.currentValue("armMode") as String } // Save the last keypad states so we can restore them later
+                supportedKeypads*.setEntryDelay(seconds) // Start entry delay beeping
+                log.debug "Starting entry delay beeping for $supportedKeypads, saved states ${state.lastKeypadModes}"
                 break
             default:
             	log.warn "Unknown keypad beeping mode $data"
@@ -616,23 +666,25 @@ def setKeypadDelay(data) {
 
 // Restore the original keypad modes
 private restoreKeypadModes() {
-    log.trace "Restoring $keypads, last state: ${state.lastKeypadModes}"
+    def supportedKeypads = keypads?.findAll{ it.hasAttribute("armMode") } // Get all supported keypads
     
-    if (keypads) {
+    log.trace "Restoring $supportedKeypads, last state: ${state.lastKeypadModes}"
+    
+    if (supportedKeypads) {
         unschedule(setKeypadDelay) // Cancel any pending keypad entry/exit timers
         if (state.lastKeypadModes) {
             if (shmModes) { // If we are using SHM Dashboard then sync the keypad with the dashboard mode
                 def shmMode = location.currentState("alarmSystemStatus")?.value
-                log.debug "Syncing ${keypads} to SHM mode ${shmMode}"
+                log.debug "Syncing ${supportedKeypads} to SHM mode ${shmMode}"
                 switch(shmMode) {
                     case "away":
-                        keypads*.setArmedAway()
+                        supportedKeypads*.setArmedAway()
                         break
                     case "stay":
-                        keypads*.setArmedStay()
+                        supportedKeypads*.setArmedStay()
                         break
                     case "off":
-                        keypads*.setDisarmed()
+                        supportedKeypads*.setDisarmed()
                         break
                     default:
                         log.warn "Unknown SHM mode: ${shmMode}"
@@ -640,7 +692,7 @@ private restoreKeypadModes() {
                 }
             } else { // Otherwise set the keypad to current mode of app
                 if (atomicState.systemArmed) { // If we are armed set to the last known armed state
-                    keypads.each { keypad ->
+                    supportedKeypads.each { keypad ->
                         switch (state.lastKeypadModes[keypad.id]) { // Restore the last keypad states
                             case "armedAway":
                                 log.debug "Setting $keypad to armedAway"
@@ -657,13 +709,13 @@ private restoreKeypadModes() {
                             case "disarmed": // We shouldn't be in disarmed state here, if so then reset it to armedAway
                             default:
                                 log.warn "Unknown $keypad last state: ${state.lastKeypadModes[keypad.id]}, setting $keypad to armedAway"
-                                keypads*.setArmedAway()
+                                supportedKeypads*.setArmedAway()
 	                            break
                         }
                     }
                 } else {
-                    log.debug "Resetting ${keypads} to Disarmed"
-                    keypads*.setDisarmed()
+                    log.debug "Resetting ${supportedKeypads} to Disarmed"
+                    supportedKeypads*.setDisarmed()
                 }
             }
             state.lastKeypadModes = [:] // We're done restoring it, reset it
@@ -675,7 +727,7 @@ private restoreKeypadModes() {
 // If we're disarming the system here (Reset) then we don't need to worry about rearming it on schedule since the arming conditions aren't met, then they change this will be retriggered
 def checkArmDisarmEvent(evt = null) {
     // Check if the user has upgraded the SmartApp and reinitailize if required
-    if (state.clientVersion != clientVersion()) {
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
         def msg = "NOTE: ${app.label} detected a code upgrade. Reinitializing, please open the app and re-validate your settings"
         runIn(1, initialize, [overwrite: true])
         log.warn msg
@@ -852,8 +904,9 @@ def startSystemArm(evt) {
             if (!state.armNotification) {
                 state.lastArmRequest = evt.lastArmRequest // Save it
                 state.armNotification = true // We've sent a notification
-                if (keypads) {
-                    log.trace "Starting exit delay beeping for $keypads in $keypadBeepDelay seconds"
+                def supportedKeypads = keypads?.findAll{ it.hasAttribute("armMode") } // Get all supported keypads
+                if (supportedKeypads) {
+                    log.trace "Starting exit delay beeping for $supportedKeypads in $keypadBeepDelay seconds"
                     runIn(keypadBeepDelay, setKeypadDelay, [overwrite: true, data: [type: "exit"]])
                 }
                 def msg = "Arming ${app.label} in about ${timeToArm.round()} minutes"
@@ -949,7 +1002,8 @@ private startAlarmSequence(evt) {
             } else {
                 runIn(seconds, startAlarmActions, [overwrite: true, data: [displayName: evt.displayName, trigger: (now() + (seconds * 1000))]])
             }
-            if (keypads) {
+            def supportedKeypads = keypads?.findAll{ it.hasAttribute("armMode") } // Get all supported keypads
+            if (supportedKeypads) {
                 runIn(0, setKeypadDelay, [overwrite: true, data: [type: "entry"]]) // No delay required here but use runIn so it overwrite any pending schedules
             }
             def msg = "$evt.displayName: starting intruder actions in $seconds seconds"
@@ -1187,6 +1241,82 @@ private void sendNotifications(message, uri = null) {
     }
 }
 
+private loginCheck() {
+    log.trace "Login check"
+	
+    authUpdate("check") { resp ->
+        if (resp?.status == 401) { // Invalid username
+            state.loginError = "Invalid username" // No response from website - we should not be here
+            state.loginSuccess = false
+        } else if ((resp?.status == 200) && resp?.data) {
+            def ret = resp.data
+            if (ret?.Authenticated) {
+                state.loginError = ""
+                state.loginSuccess = true
+            } else {
+                state.loginError = ret?.Error
+                state.loginSuccess = false
+            }
+        } else {
+            state.loginError = "Unable to authenticate license, please try again later" // No response from website - we should not be here
+            state.loginSuccess = false
+        }
+    }
+}
+
+private authUpdate(String action, Closure closure = null) {
+    if (!username) {
+    	return
+    }
+    
+    def params = [
+        uri: "https://auth.rboyapps.com/v1/license",
+        headers: [
+            Authorization: "Basic ${"${username?.trim()?.toLowerCase()}:${username?.trim()?.toLowerCase()}".getBytes().encodeBase64()}",
+        ],
+        body: [
+            AppId: app.id,
+            Timestamp: new Date(now()).format("yyyy-MM-dd'T'HH:mm:ssXXX", location.timeZone ?: TimeZone.getDefault()), // ISO_8601
+            State: action,
+            Username: username?.trim()?.toLowerCase(),
+            LocationId: location.id,
+            LocationName: location.name,
+            AccountId: app.accountId,
+            AppName: "Intruder Alert with Actions",
+            AppInstallName: app.label,
+            AppVersion: clientVersion(),
+        ]
+    ]
+    
+    log.trace "Calling AuthUpdate\n${params}"
+
+    try {
+        httpPostJson(params) { resp ->
+            /*resp?.headers.each {
+                log.trace "${it.name} : ${it.value}"
+            }
+            log.trace "response contentType: ${resp?.contentType}"*/
+            log.debug "response data: ${resp?.data}"
+            if (closure) {
+                closure(resp)
+            }
+        }
+    } catch (e) {
+        //log.error "Auth response:\n${e.response?.data}\n\n${e.response?.allHeaders}\n\n${e.response?.status}\n\n${e.response?.statusLine}\n\n$e"
+        if ("${e}"?.contains("HttpResponseException")) { // If it's a HTTP error with non 200 status
+            log.warn "Auth status: ${e?.response?.status}, response: ${e?.response?.statusLine}"
+            if (closure) {
+                closure(e?.response)
+            }
+        } else { // Some other error
+            log.error "Auth error: $e"
+            if (closure) {
+                closure(null)
+            }
+        }
+    }
+}
+
 def checkForCodeUpdate(evt = null) {
     log.trace "Getting latest version data from the RBoy Apps server"
     
@@ -1261,6 +1391,7 @@ def checkForCodeUpdate(evt = null) {
 }
 
 // THIS IS THE END OF THE FILE
+
 
 
 

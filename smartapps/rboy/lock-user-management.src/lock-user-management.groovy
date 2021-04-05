@@ -20,9 +20,7 @@
 * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
 */ 
 
-def clientVersion() {
-    return "07.10.03"
-}
+def clientVersion() { "07.13.04" }
 
 /**
 * Add and remove multiple user codes for locks with Scheduling and notification options and local actions
@@ -30,6 +28,13 @@ def clientVersion() {
 * Copyright RBoy Apps, redistribution or reuse of code is not allowed without permission
 *
 * Change Log:
+* 2020-08-05 - (v07.13.04) Dont' send code upgrade notifications
+* 2020-07-29 - (v07.13.03) Fix for Door open/close actions when using multiple doors on Android Classic app
+* 2020-07-26 - (v07.13.01) New app/platform improvements
+* 2020-06-22 - (v07.12.01) Optimized page layout for door open/close actions when multiple locks are selected
+* 2020-05-22 - (v07.12.00) Added option to lock/unlock locks for presence users and disabled auto unlock for open doors (security)
+* 2020-05-01 - (v07.11.00) Added option to toggle switches on keypad lock/unlock/arm modes
+* 2020-04-02 - (v07.10.04) Fix for keypad lock report for Enhanced ZigBee device handler
 * 2020-01-20 - (v07.10.03) Update icons for broken ST Android app 2.18
 * 2019-11-26 - (v07.10.02) Update for changes in platform limits, optimize performance
 * 2019-11-05 - (v07.10.00) Improved user status display logic, don't drop requests if retry fails, try again next time user saves the app
@@ -194,6 +199,8 @@ definition(
 )
 
 preferences {
+    page(name: "loginPage")
+    page(name: "loginPage2")
     page(name: "setupApp")
     page(name: "usersPage")
     page(name: "notificationsPage")
@@ -204,6 +211,7 @@ preferences {
     page(name: "lockKeypadActionsPage")
     page(name: "lockManualActionsPage")
     page(name: "openCloseDoorPage")
+    page(name: "openCloseDoorPageSummary")
     page(name: "scheduleCodesPage")
     page(name: "userConfigPage")
 }
@@ -239,6 +247,48 @@ private getSchedulingOptions() {
         'Saturday',
         'Sunday'
     ]
+}
+
+def loginPage() {
+    log.trace "Login page"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage", "loginPage2")
+    }
+}
+
+def loginPage2() {
+    log.trace "Login page2"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage2", "loginPage")
+    }
+}
+
+private loginSection(name, nextPage) {
+    dynamicPage(name: name, title: "Lock User Management v${clientVersion()}", install: state.loginSuccess, uninstall: true, nextPage: state.loginSuccess ? "" : nextPage) {
+        section() {
+            if (state.loginError) {
+                log.warn "Authenticating failed: ${state.loginError}"
+                paragraph title: "Login failed", image: "https://www.rboyapps.com/images/RBoyApps.png", required: true, "${state.loginError}"
+            } else {
+                log.debug "Check authentication credentials, Login: $username"
+                paragraph title: "Login", image: "https://www.rboyapps.com/images/RBoyApps.png", required: false, "Enter your RBoy Apps username\nYou can retrieve your username from www.rboyapps.com lost password page"
+            }
+
+            input name: "username", type: "text", title: "Username", capitalization: "none", submitOnChange: false, required: false
+        }
+    }
 }
 
 def setupApp() {
@@ -283,7 +333,7 @@ def setupApp() {
                     passed: true 
                 ]
                 href(name: "unlockLockActions", params: hrefParams, title: "Lock/unlock actions", page: "unlockLockActionsPage", description: "", required: false, image: "https://www.rboyapps.com/images/LockUnlock.png")
-                href(name: "openCloseDoor", title: "Door open/close actions", page: "openCloseDoorPage", description: "", required: false, image: "https://www.rboyapps.com/images/DoorOpenClose.png")
+                href(name: "openCloseDoorSummary", title: "Door open/close actions", page: "openCloseDoorPageSummary", description: "", required: false, image: "https://www.rboyapps.com/images/DoorOpenClose.png")
                 href(name: "notifications", params: hrefParams, title: "Notifications", page: "notificationsPage", description: "", required: false, image: "https://www.rboyapps.com/images/NotificationsD.png")
             }
 
@@ -305,6 +355,10 @@ def setupApp() {
                 paragraph "Click 'Done' to install the app. Then you can open it from the 'SmartApps' tab to finish configuring it.\r\n\r\nEnsure that there is a buffering device between your lock and hub. See FAQ page for more details."
                 label title: "Assign a name for this SmartApp (optional)", required: false
             }
+        }
+        
+        section("Confidential", hideable: true, hidden: true) {
+            paragraph("RBoy Apps Username: " + (username?.toLowerCase() ?: "Unlicensed") + (state.loginSuccess ? "" : ", contact suppport"))
         }
         
         remove("Uninstall")
@@ -348,56 +402,104 @@ def notificationsPage(params) {
     }
 }
 
-def openCloseDoorPage() {
-    dynamicPage(name:"openCloseDoorPage", title: "Select door open/close sensor for each door and configure the automatic unlock, relock and notifications of the door", uninstall: false, install: false) {
+def openCloseDoorPageSummary() {
+    if (locks?.size() > 1) {
+        dynamicPage(name:"openCloseDoorPageSummary", title: "Select door open/close sensor and configure the automatic unlock, relock and notifications for each door", uninstall: false, install: false) {
+            section {
+                for (lock in locks) {
+                    def hrefParams = [
+                        lockId: lock.id, 
+                        passed: true 
+                    ]
+                    href(name: "openCloseDoor${lock}", params: hrefParams, title: "${lock}", page: "openCloseDoorPage", description: doorOpenCloseStatus(lock), required: false, image: "https://www.rboyapps.com/images/DoorOpenClose.png")
+                }
+            }
+        }
+    } else if(locks?.size() == 1) {
+        def hrefParams = [
+            lockId: locks.first().id, 
+            passed: true 
+        ]
+        openCloseDoorPage(hrefParams)
+    } else {
+        dynamicPage(name:"openCloseDoorPageSummary", title: "Select door open/close sensor and configure the automatic unlock, relock and notifications for each door", uninstall: false, install: false) {
+            section("No locks/doors to configure") {
+                paragraph title: "First select locks on the previous page", required: true, ""
+            }
+        }
+    }
+}
+
+private doorOpenCloseStatus(lock) { 
+    (
+        ((lock.hasAttribute('autolock') && (lock.latestValue("autolock") == "enabled")) ? false : (settings."relockDoor${lock}" ? (settings."relockImmediate${lock}" ?: settings."relockAfter${lock}") : false)) ||
+        (settings."openNotifyBeep${lock}" && settings."sensor${lock}") ||
+        (settings."openNotify${lock}" && settings."sensor${lock}" && settings."openNotifyTimeout${lock}")
+    ) ? "Configured" : ""
+}
+
+def openCloseDoorPage(params) {
+    // params is broken, after doing a submitOnChange on this page, params is lost. So as a work around when this page is called with params save it to state and if the page is called with no params we know it's the bug and use the last state instead
+    // Get details from the passed in params when the page is loading, else get from the last saved to work around not having params on pages
+    if (params.passed) {
+        atomicState.params = params // We got something, so save it otherwise it's a page refresh for submitOnChange
+        log.trace "Passed from main page, using params lookup ${params}"
+    } else if (atomicState.params) {
+        params = atomicState.params
+        log.trace "Passed from submitOnChange, atomicState lookup ${atomicState.params}"
+    } else {
+        log.error "Invalid params, no details found. Params: $params, saved params: $atomicState.params"
+    }
+    
+    def lock = params?.lockId ? locks.find { it.id == params?.lockId } : locks.first()
+
+    log.trace "Door Open Close Page, lock $lock, passed params: $params, saved params:$atomicState.params"
+
+    dynamicPage(name:"openCloseDoorPage", title: "Door open/close actions for ${lock}", uninstall: false, install: false) {
         section {
-            for (lock in locks) {
-                def priorRelockDoor = settings."relockDoor${lock}"
-                def priorRelockImmediate = settings."relockImmediate${lock}"
-                def priorRelockAfter = settings."relockAfter${lock}"
-                def priorRetractDeadbolt = settings."retractDeadbolt${lock}"
-                def priorNotifyOpen = settings."openNotify${lock}"
-                def priorNotifyOpenTimeout = settings."openNotifyTimeout${lock}"
-                def priorOpenNotifyModes = settings."openNotifyModes${lock}"
-                def priorRelockDoorModes = settings."relockDoorModes${lock}"
-                def priorNotifyBeep = settings."openNotifyBeep${lock}"
-                def priorSensor = settings."sensor${lock}"
-                def reqDoorSensor = priorRelockImmediate || priorRetractDeadbolt || priorNotifyOpen || priorNotifyBeep
+            def priorRelockDoor = settings."relockDoor${lock}"
+            def priorRelockImmediate = settings."relockImmediate${lock}"
+            def priorRelockAfter = settings."relockAfter${lock}"
+            def priorRetractDeadbolt = false //settings."retractDeadbolt${lock}"
+            def priorNotifyOpen = settings."openNotify${lock}"
+            def priorNotifyOpenTimeout = settings."openNotifyTimeout${lock}"
+            def priorOpenNotifyModes = settings."openNotifyModes${lock}"
+            def priorRelockDoorModes = settings."relockDoorModes${lock}"
+            def priorNotifyBeep = settings."openNotifyBeep${lock}"
+            def priorSensor = settings."sensor${lock}"
+            def reqDoorSensor = priorRelockImmediate || priorRetractDeadbolt || priorNotifyOpen || priorNotifyBeep
 
-                paragraph title: "Configure ${lock}", required: true, ""
-                if (priorRelockDoor || priorRetractDeadbolt || priorNotifyOpen || priorNotifyBeep) {
-                    input "sensor${lock}", "capability.contactSensor", title: "Door open/close sensor${reqDoorSensor ? "" : " (optional)"}", required: ( reqDoorSensor ? true : false), submitOnChange: true // required for deadbolt, immediate relock or notifications
-                }
+            paragraph "Select door open/close sensor and configure the automatic unlock, relock and notifications"
+            if (priorRelockDoor || priorRetractDeadbolt || priorNotifyOpen || priorNotifyBeep) {
+                input "sensor${lock}", "capability.contactSensor", title: "Door open/close sensor${reqDoorSensor ? "" : " (optional)"}", required: ( reqDoorSensor ? true : false), submitOnChange: true // required for deadbolt, immediate relock or notifications
+            }
 
-                // Sanity check do not offer AutoLock is hardware autoLock is engaged
-                if (lock.hasAttribute('autolock') && (lock.latestValue("autolock") == "enabled")) {
-                    paragraph title: "Disable AutoLock on physical lock to use SmartApp AutoReLock and AutoUnlock features", required: true, ""
-                } else {
-                    input "relockDoor${lock}", "bool", title: "Relock door automatically", defaultValue: priorRelockDoor, required: false, submitOnChange: true
-                    if (priorRelockDoor) {
-                        input "relockImmediate${lock}", "bool", title: "Relock immediately after closing", defaultValue: priorRelockImmediate, required: false, submitOnChange: true
-                        if (!priorRelockImmediate) {
-                            input "relockAfter${lock}", "number", title: "Relock after ${priorSensor ? "closing" : "unlocking"} (minutes)", defaultValue: priorRelockAfter, required: true                   
-                        }
-                        input "relockDoorModes${lock}", "mode", title: "...only when in this mode(s) (optional)", defaultValue: priorRelockDoorModes, required: false, multiple: true
+            // Sanity check do not offer AutoLock is hardware autoLock is engaged
+            if (lock.hasAttribute('autolock') && (lock.latestValue("autolock") == "enabled")) {
+                paragraph title: "Disable AutoLock on physical lock to use SmartApp AutoReLock features", required: true, ""
+            } else {
+                input "relockDoor${lock}", "bool", title: "Relock door automatically", defaultValue: priorRelockDoor, required: false, submitOnChange: true
+                if (priorRelockDoor) {
+                    input "relockImmediate${lock}", "bool", title: "Relock immediately after closing", defaultValue: priorRelockImmediate, required: false, submitOnChange: true
+                    if (!priorRelockImmediate) {
+                        input "relockAfter${lock}", "number", title: "Relock after ${priorSensor ? "closing" : "unlocking"} (minutes)", defaultValue: priorRelockAfter, required: true                   
                     }
-                    if (priorRetractDeadbolt) {
-                        paragraph "NOTE: Make sure the AutoLock feature on the lock is disabled to avoid an infinite locking/unlocking loop.", required: false, submitOnChange: true
-                    }
-                    input "retractDeadbolt${lock}", "bool", title: "Unlock door if locked while open", defaultValue: priorRetractDeadbolt, description: "This retracts the deadbolt if it extends while the door is still open", required: false, submitOnChange: true
+                    input "relockDoorModes${lock}", "mode", title: "...only when in this mode(s) (optional)", defaultValue: priorRelockDoorModes, required: false, multiple: true
                 }
+                if (priorRetractDeadbolt) {
+                    paragraph "NOTE: Make sure the AutoLock feature on the lock is disabled to avoid an infinite locking/unlocking loop.", required: false, submitOnChange: true
+                }
+                //input "retractDeadbolt${lock}", "bool", title: "Unlock door if locked while open", defaultValue: priorRetractDeadbolt, description: "This retracts the deadbolt if it extends while the door is still open", required: false, submitOnChange: true
+            }
 
-                input "openNotifyBeep${lock}", "capability.tone", title: "Ring chime when door is opened", multiple: true, required: false, submitOnChange: true
-                input "openNotify${lock}", "bool", title: "Notify if door has been left open", defaultValue: priorNotifyOpen, required: false, submitOnChange: true
-                if (priorNotifyOpen) {
-                    input "openNotifyTimeout${lock}", "number", title: "...for (minutes)", defaultValue: priorNotifyOpenTimeout, required: true, range: "1..*"
-                    input "openNotifyRepeat${lock}", "bool", title: "...recheck and notify", defaultValue: true, required: false
-                }
-                if (priorNotifyOpen || priorNotifyBeep) {
-                    input "openNotifyModes${lock}", "mode", title: "...only when in this mode(s) (optional)", defaultValue: priorOpenNotifyModes, required: false, multiple: true
-                }
-
-                paragraph "\r\n"
+            input "openNotifyBeep${lock}", "capability.tone", title: "Ring chime when door is opened", multiple: true, required: false, submitOnChange: true
+            input "openNotify${lock}", "bool", title: "Notify if door has been left open", defaultValue: priorNotifyOpen, required: false, submitOnChange: true
+            if (priorNotifyOpen) {
+                input "openNotifyTimeout${lock}", "number", title: "...for (minutes)", defaultValue: priorNotifyOpenTimeout, required: true, range: "1..*"
+                input "openNotifyRepeat${lock}", "bool", title: "...recheck and notify", defaultValue: true, required: false
+            }
+            if (priorNotifyOpen || priorNotifyBeep) {
+                input "openNotifyModes${lock}", "mode", title: "...only when in this mode(s) (optional)", defaultValue: priorOpenNotifyModes, required: false, multiple: true
             }
         }
     }
@@ -552,6 +654,7 @@ def unlockKeypadActionsPage(params) {
             input "turnOnSwitchesAfterSunset${lock}${user}", "capability.switch", title: "Turn on light(s) after dark", required: false, multiple: true
             input "turnOnSwitches${lock}${user}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "turnOffSwitches${lock}${user}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
+            input "toggleSwitches${lock}${user}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
             input "unlockLocks${lock}${user}","capability.lock", title: "Unlock lock(s)", required: false, multiple: true
             input "openGarage${lock}${user}","capability.garageDoorControl", title: "Open garage door(s)", required: false, multiple: true
 
@@ -659,6 +762,7 @@ def armKeypadActionsPage(params) {
                 input "externalLockMode${lock}${user}${arm}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
                 input "externalLockTurnOnSwitches${lock}${user}${arm}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
                 input "externalLockTurnOffSwitches${lock}${user}${arm}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
+                input "externalLockToggleSwitches${lock}${user}${arm}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
                 input "lockLocks${lock}${user}${arm}","capability.lock", title: "Lock lock(s)", required: false, multiple: true
                 input "closeGarage${lock}${user}${arm}","capability.garageDoorControl", title: "Close garage door(s)", required: false, multiple: true
             }
@@ -734,6 +838,7 @@ def lockKeypadActionsPage(params) {
             input "externalLockMode${lock}${user}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
             input "externalLockTurnOnSwitches${lock}${user}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "externalLockTurnOffSwitches${lock}${user}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
+            input "externalLockToggleSwitches${lock}${user}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
             input "lockLocks${lock}${user}","capability.lock", title: "Lock lock(s)", required: false, multiple: true
             input "closeGarage${lock}${user}","capability.garageDoorControl", title: "Close garage door(s)", required: false, multiple: true
 
@@ -1319,6 +1424,8 @@ def userConfigPage(params) {
                 case 'Presence':
                     input "userPresent${i}", "capability.presenceSensor", title: "...if any these people are present", description: "code should be active when any of these people are present", required: false, multiple: true
                     input "userNotPresent${i}", "capability.presenceSensor", title: "...and none of these people are present", description: "when all these people are not present", required: false, multiple: true
+                    input "userPresenceLock${i}", "bool", title: "...lock automatically", description: "lock doors when deactivating user", required: false
+                    input "userPresenceUnlock${i}", "bool", title: "...unlock automatically", description: "unlock doors when activating user", required: false
                     break
 
                 case 'Modes':
@@ -1466,15 +1573,25 @@ private getLockPinLengthDetails(subLocks = locks) {
 }
 
 
+def uninstalled() {
+    log.debug "Uninstall called"
+    authUpdate("uninstall")
+}
 
 def installed() {
     log.debug "Install Settings: $settings"
+    authUpdate("install")
+    state.sendUpdate = false
     state.clearCodes = true // On a fresh install start by clearing all codes to avoid issues
     appTouch()
 }
 
 def updated() {
     log.debug "Update Settings: $settings"
+    if (state.sendUpdate) {
+        authUpdate("update")
+        state.sendUpdate = false
+    }
     if (!state.clearCodes) { // Some bug in the platform, calls updated on install so skip it
         appTouch()
     }
@@ -1636,6 +1753,60 @@ def changeHandler(evt) {
                 def sensorEvt = [name: sensor.name, displayName: sensor.displayName, value: sensor.latestValue("contact"), device: sensor]
                 sensorHandler(sensorEvt)
             }
+        }
+    }
+    
+    if (evt?.name == "presence") { // User arrives/leaves
+        log.trace "Checking for presence ${evt?.device} actions"
+        def msgs = [:]
+        for (int i = 1; i <= maxUserNames; i++) {
+            def code = settings."userCodes${i}" as String
+            def type = settings."userType${i}"
+            def userPresent = settings."userPresent${i}"
+            def userNotPresent = settings."userNotPresent${i}"
+            def presenceLock = settings."userPresenceLock${i}"
+            def presenceUnlock = settings."userPresenceUnlock${i}"
+            if ((code != null) && (type == "Presence") && (presenceLock || presenceUnlock) && ((userPresent?.any { evt?.device?.id == it.id }) || (userNotPresent?.any { evt?.device?.id == it.id }))) { // Find all programmed users controlled by presence and need to lock/unlock on presence
+                def userLocks = (locks?.size() > 1) ? (settings."userLocks${i}" ?: locks*.id) : locks*.id // If not defined or only one lock then check all locks
+                def name = settings."userNames${i}" // Get the name for the slot
+                def doAdd = false
+                // Any of the 'present' users AND none of the 'not present' users are there then the code is active so unlock OR lock as required
+                if ((userPresent ? userPresent.any{it.currentPresence == "present"} : true) &&
+                    (userNotPresent ? userNotPresent.every{it.currentPresence != "present"} : true)
+                   ) {
+                    doAdd = true
+                } else {
+                    doAdd = false
+                }
+                
+                for (lock in locks) {
+                    if (userLocks.contains(lock.id)) {
+                        if (!doAdd && presenceLock) {
+                            def msg = "Locking ${lock} for user ${name} because ${evt.device.displayName} ${evt.value == "present" ? "arrived" : "left"}"
+                            if (lock.currentValue("lock") != "locked") {
+                                log.info msg
+                                msgs += [ "${msg}" : (settings."userOverrideNotifications${i}" && settings."userNotify${i}") ? i as String : "" ] // TODO: For now ALWAYS notify if locking/unlocking for security reasons, can use custom notifications settings
+                                lock.lock()
+                            } else {
+                                log.debug "${lock} already locked, skipping ${msg}"
+                            }
+                        } else if (doAdd && presenceUnlock) {
+                            def msg = "Unlocking ${lock} for user ${name} because ${evt.device.displayName} ${evt.value == "present" ? "arrived" : "left"}"
+                            if (lock.currentValue("lock") != "unlocked") {
+                                log.info msg
+                                msgs += [ "${msg}" : (settings."userOverrideNotifications${i}" && settings."userNotify${i}") ? i as String : "" ] // TODO: For now ALWAYS notify if locking/unlocking for security reasons, can use custom notifications settings
+                                lock.unlock()
+                            } else {
+                                log.debug "${lock} already unlocked, skipping ${msg}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Last thing to do because it can timeout
+        msgs.each { msg, user ->
+            sendNotifications(msg, user)
         }
     }
 
@@ -2137,7 +2308,7 @@ def processUnlockEvent(evt) {
     }
     
     def user = (data?.usedCode as String) ?: ((data?.codeId as String) ?: "") // get the user if present
-    def i = (data?.usedCode as Integer) ?: ((data?.codeId as Integer) ?: 0) // get the user if present
+    def i = ((data?.usedCode ?: 0) as Integer) ?: (((data?.codeId ?: 0) as Integer) ?: 0) // get the user if present
     def lockMode = data?.type ?: (data?.method ?: (evt.descriptionText?.contains("manually") ? "manually" : "electronically"))
     // Fix for proper grammar
     switch (lockMode) {
@@ -2390,6 +2561,14 @@ def processUnlockEvent(evt) {
                 msg += detailedNotifications ? ", turning off switches ${settings."turnOffSwitches${lockStr}${user}"}" : ""
             }
             
+            if (settings."toggleSwitches${lockStr}${user}") {
+                log.info "$evt.displayName was unlocked successfully, toggling switches ${settings."toggleSwitches${lockStr}${user}"}"
+                settings."toggleSwitches${lockStr}${user}".each { dev ->
+                	dev.currentValue("switch") == "on" ? dev?.off() : dev?.on()
+                }
+                msg += detailedNotifications ? ", toggling switches ${settings."toggleSwitches${lockStr}${user}"}" : ""
+            }
+
             if (settings."unlockLocks${lockStr}${user}") {
                 log.info "$evt.displayName was unlocked successfully, unlocking ${settings."unlockLocks${lockStr}${user}"}"
                 settings."unlockLocks${lockStr}${user}"?.unlock()
@@ -2480,7 +2659,7 @@ def processLockEvent(evt) {
     evt.lockMode = lockMode // Save the lockMode calculated
     evt.data = data // Update the data to be passed
     user = (data?.usedCode as String) ?: ((data?.codeId as String) ?: "") // get the user if present
-    i = (data?.usedCode as Integer) ?: ((data?.codeId as Integer) ?: 0) // get the user if present
+    i = ((data?.usedCode ?: 0) as Integer) ?: (((data?.codeId ?: 0) as Integer) ?: 0) // get the user if present
     log.trace "$lock locked by user $user $lockMode"
 
     // Check if we have user override unlock actions defined
@@ -2563,7 +2742,7 @@ def processLockEvent(evt) {
     }
 
     // Check if we need to retract a deadbolt lock it was locked while the door was still open
-    if (settings."retractDeadbolt${lock}") {
+    /*if (settings."retractDeadbolt${lock}") { // SECURITY ISSUE - DISABLE
         def sensor = settings."sensor${lock}"
         if (sensor.latestValue("contact") == "open") {
             if (lock.hasAttribute('autolock') && (lock.latestValue("autolock") == "enabled")) { // Do not unlock if autolock features on the lock are enabled, avoid infinite loop
@@ -2583,7 +2762,7 @@ def processLockEvent(evt) {
         } else {
             log.trace "$lock was locked while the door was closed, we're good"
         }
-    }
+    }*/
 
     // Last thing to do because it can timeout
     for (msg in msgs) {
@@ -2598,7 +2777,7 @@ def processLockActions(evt) {
     def lockMode = evt.lockMode
     def arm = "" // Security keypad arm mode (optional)
     def user = (data?.usedCode as String) ?: ((data?.codeId as String) ?: "") // get the user if present
-    def i = (data?.usedCode as Integer) ?: ((data?.codeId as Integer) ?: 0) // get the user if present
+    def i = ((data?.usedCode ?: 0) as Integer) ?: (((data?.codeId ?: 0) as Integer) ?: 0) // get the user if present
 
     log.trace "Processing $lock lock actions: $evt"
 
@@ -2764,8 +2943,6 @@ def processLockActions(evt) {
                 log.info "$evt.displayName was locked successfully, running routine ${settings."externalLockPhrase${lockStr}${user}${arm}"}"
                 location.helloHome.execute(settings."externalLockPhrase${lockStr}${user}${arm}")
                 msg += detailedNotifications ? ", running ${settings."externalLockPhrase${lockStr}${user}${arm}"}" : ""
-            } else {
-                log.trace "No individual routine configured to run when locked $lockMode for $lock"
             }
 
             if (settings."externalLockTurnOnSwitches${lockStr}${user}${arm}") {
@@ -2780,6 +2957,14 @@ def processLockActions(evt) {
                 msg += detailedNotifications ? ", turning off switches ${settings."externalLockTurnOffSwitches${lockStr}${user}${arm}"}" : ""
             }
             
+            if (settings."externalLockToggleSwitches${lockStr}${user}${arm}") {
+                log.info "$evt.displayName was locked successfully, toggling switches ${settings."externalLockToggleSwitches${lockStr}${user}${arm}"}"
+                settings."externalLockToggleSwitches${lockStr}${user}${arm}".each { dev ->
+                	dev.currentValue("switch") == "on" ? dev?.off() : dev?.on()
+                }
+                msg += detailedNotifications ? ", toggling switches ${settings."externalLockToggleSwitches${lockStr}${user}${arm}"}" : ""
+            }
+
             if (settings."lockLocks${lockStr}${user}${arm}") {
                 log.info "$evt.displayName was locked successfully, locking ${settings."lockLocks${lockStr}${user}${arm}"}"
                 settings."lockLocks${lockStr}${user}${arm}"?.lock()
@@ -2855,8 +3040,6 @@ def processLockActions(evt) {
                 log.info "$evt.displayName was locked successfully, running routine ${settings."externalLockPhraseManual${lockStr}"}"
                 location.helloHome.execute(settings."externalLockPhraseManual${lockStr}")
                 msg += detailedNotifications ? ", running ${settings."externalLockPhraseManual${lockStr}"}" : ""
-            } else {
-                log.trace "No individual routine configured to run when locked $lockMode for $lock"
             }
 
             if (settings."externalLockTurnOnSwitchesManual${lockStr}") {
@@ -2963,11 +3146,11 @@ def clearAllCodes() {
 
 def codeCheck() {
     // Check if the user has upgraded the SmartApp and reinitailize if required
-    if (state.clientVersion != clientVersion()) {
-        def msg = "NOTE: ${app.label} detected a code upgrade. Updating configuration, please open the app and click on Save to re-validate your settings"
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
+        def msg = "NOTE: ${app.label} detected a code upgrade. Updating configuration, please open the app and re-validate your settings"
         log.warn msg
         startTimer(1, appTouch) // Reinitialize the app offline to avoid a loop as appTouch calls codeCheck
-        sendNotifications(msg) // Do this in the end as it may timeout
+        //sendPush msg // Do this in the end as it may timeout
         return
     }
     
@@ -2995,7 +3178,7 @@ def codeCheck() {
 
     for (lock in locks) {
     	if ((state.lockCodes == null) || (state.lockCodes[lock.id] == null) || (state.retryCodeCount[lock.id] == null)) { // If we have a situation where the user added a new lock without tapping save reinitialize the app
-            def msg = "${app.label} detected an unsaved configuration change. Reinitializing the app, please open the app and click on Save to re-validate your settings"
+            def msg = "${app.label} detected an unsaved configuration change. Reinitializing the app, please open the app and re-validate your settings"
             log.warn msg
             startTimer(1, appTouch) // Reinitialize the app offline to avoid a loop as appTouch calls codeCheck
             return // We're done here
@@ -3958,6 +4141,82 @@ private deleteSettings(map) {
     }
 }
 
+private loginCheck() {
+    log.trace "Login check"
+	
+    authUpdate("check") { resp ->
+        if (resp?.status == 401) { // Invalid username
+            state.loginError = "Invalid username" // No response from website - we should not be here
+            state.loginSuccess = false
+        } else if ((resp?.status == 200) && resp?.data) {
+            def ret = resp.data
+            if (ret?.Authenticated) {
+                state.loginError = ""
+                state.loginSuccess = true
+            } else {
+                state.loginError = ret?.Error
+                state.loginSuccess = false
+            }
+        } else {
+            state.loginError = "Unable to authenticate license, please try again later" // No response from website - we should not be here
+            state.loginSuccess = false
+        }
+    }
+}
+
+private authUpdate(String action, Closure closure = null) {
+    if (!username) {
+    	return
+    }
+    
+    def params = [
+        uri: "https://auth.rboyapps.com/v1/license",
+        headers: [
+            Authorization: "Basic ${"${username?.trim()?.toLowerCase()}:${username?.trim()?.toLowerCase()}".getBytes().encodeBase64()}",
+        ],
+        body: [
+            AppId: app.id,
+            Timestamp: new Date(now()).format("yyyy-MM-dd'T'HH:mm:ssXXX", location.timeZone ?: TimeZone.getDefault()), // ISO_8601
+            State: action,
+            Username: username?.trim()?.toLowerCase(),
+            LocationId: location.id,
+            LocationName: location.name,
+            AccountId: app.accountId,
+            AppName: "Lock User Management",
+            AppInstallName: app.label,
+            AppVersion: clientVersion(),
+        ]
+    ]
+    
+    log.trace "Calling AuthUpdate\n${params}"
+
+    try {
+        httpPostJson(params) { resp ->
+            /*resp?.headers.each {
+                log.trace "${it.name} : ${it.value}"
+            }
+            log.trace "response contentType: ${resp?.contentType}"*/
+            log.debug "response data: ${resp?.data}"
+            if (closure) {
+                closure(resp)
+            }
+        }
+    } catch (e) {
+        //log.error "Auth response:\n${e.response?.data}\n\n${e.response?.allHeaders}\n\n${e.response?.status}\n\n${e.response?.statusLine}\n\n$e"
+        if ("${e}"?.contains("HttpResponseException")) { // If it's a HTTP error with non 200 status
+            log.warn "Auth status: ${e?.response?.status}, response: ${e?.response?.statusLine}"
+            if (closure) {
+                closure(e?.response)
+            }
+        } else { // Some other error
+            log.error "Auth error: $e"
+            if (closure) {
+                closure(null)
+            }
+        }
+    }
+}
+
 def checkForCodeUpdate(evt = null) {
     log.trace "Getting latest version data from the RBoy Apps server"
     
@@ -4017,4 +4276,5 @@ def checkForCodeUpdate(evt = null) {
 }
 
 // THIS IS THE END OF THE FILE
+
 
