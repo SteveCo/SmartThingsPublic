@@ -21,13 +21,15 @@
  * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
  */ 
 
-def clientVersion() { return "02.12.00" }
+def clientVersion() { return "03.00.01" }
  
 /**
- *  Mode Change Thermostat Temperature
+ *  Ultimate Mode Change Thermostat Temperature
  *
  * Copyright RBoy Apps, redistribution or reuse of code is not allowed without permission
  *
+ * 2020-10-26 - (v03.00.01) Clean up
+ * 2020-10-16 - (v03.00.00) Support for new platform thermostat capabilities which don't support auto
  * 2020-07-31 - (v02.12.00) New app/platform improvements
  * 2020-05-04 - (v02.11.02) Try to detect platform outage and prevent code upgrade spam notifications
  * 2020-02-05 - (v02.11.01) Add limits for temperature inputs
@@ -69,9 +71,9 @@ definition(
 		author: "RBoy Apps",
 		description: "Change the thermostat(s) temperature on a mode(s) change",
     	category: "Green Living",
-    	iconUrl: "https://s3.amazonaws.com/smartapp-icons/GreenLiving/Cat-GreenLiving.png",
-    	iconX2Url: "https://s3.amazonaws.com/smartapp-icons/GreenLiving/Cat-GreenLiving@2x.png",
-    	iconX3Url: "https://s3.amazonaws.com/smartapp-icons/GreenLiving/Cat-GreenLiving@3x.png")
+    	iconUrl: "https://www.rboyapps.com/images/UltimateModesBasedThermostat.png",
+    	iconX2Url: "https://www.rboyapps.com/images/UltimateModesBasedThermostat.png",
+    	iconX3Url: "https://www.rboyapps.com/images/UltimateModesBasedThermostat.png")
 
 preferences {
     page(name: "loginPage")
@@ -125,7 +127,16 @@ private loginSection(name, nextPage) {
 def setupApp() {
     dynamicPage(name: "setupApp", title: "Ultimate Mode Change Thermostat Temperature v${clientVersion()}", install: false, uninstall: true, nextPage: "tempPage") {
         section("Select thermostat(s)") {
-            input "thermostats", title: "Select thermostat(s) to configure", "capability.thermostat", required: false, multiple: true
+            if (!(coolingThermostats || heatingThermostats)) {
+                input "thermostats", "capability.thermostat", title: "Heating & Cooling thermostat(s)", required: false, multiple:true, submitOnChange: true
+            }
+            if (!(coolingThermostats || heatingThermostats || thermostats)) {
+                paragraph "** OR **"
+            }
+            if (!thermostats) {
+                input "heatingThermostats", "capability.thermostatCoolingSetpoint", title: "Heating thermostat(s)", required: false, multiple:true, submitOnChange: true
+                input "coolingThermostats", "capability.thermostatHeatingSetpoint", title: "Cooling thermostat(s)", required: false, multiple:true, submitOnChange: true
+            }                
         }
 
         section("Select Mode(s)") {
@@ -163,19 +174,19 @@ def tempPage() {
                     paragraph title: "$modeName Mode Thermostat Settings", "Enter the heat/cool temperatures for thermostats in $modeName mode"
                 }
             }
-            def maxThermostats = multiTempThermostat ? thermostats?.size() : 1
+            def maxThermostats = multiTempThermostat ? allThermostats?.size() : 1
             for (int i = 0; i < maxThermostats; i++) {
                 def heat = settings."opHeatSet${i}${j}"
                 def cool = settings."opCoolSet${i}${j}"
-                log.debug "$modeName Mode ${multiTempThermostat ? thermostats[i] : "All Thermostats"} Heat: $heat, Cool: $cool"
+                log.debug "$modeName Mode ${multiTempThermostat ? allThermostats[i] : "All Thermostats"} Heat: $heat, Cool: $cool"
 
-                section("${multiTempThermostat ? thermostats[i] : "All Thermostats"} heat/cool temperatures") {
+                section("${multiTempThermostat ? allThermostats[i] : "All Thermostats"} heat/cool temperatures") {
                     input "opHeatSet${i}${j}", "decimal", defaultValue: "${heat ?: ""}", title: "When Heating", range: "0..100", description: "Heating temperature for mode", required: true
                     input "opCoolSet${i}${j}", "decimal", defaultValue: "${cool ?: ""}", title: "When Cooling", range: "0..100", description: "Cooling temperature for mode", required: true
                     if ((settings."remoteTemperatureSensor${i}${j}"*.currentTemperature)?.count { it } > 1) {
                         paragraph title: "You have selected multiple remote sensors, the average temperature across the sensors will be used", required: true, ""
                     }
-                    input "remoteTemperatureSensor${i}${j}", "capability.temperatureMeasurement", title: "Remote temperature sensor", description: "Use remote temperature sensor to control ${multiTempThermostat ? thermostats[i] : "All Thermostats"} for $modeName mode", required: false, multiple:true, submitOnChange: true
+                    input "remoteTemperatureSensor${i}${j}", "capability.temperatureMeasurement", title: "Remote temperature sensor", description: "Use remote temperature sensor to control ${multiTempThermostat ? allThermostats[i] : "All Thermostats"} for $modeName mode", required: false, multiple:true, submitOnChange: true
                     if (settings."remoteTemperatureSensor${i}${j}") {
                         input "threshold${i}${j}", "decimal", title: "Temperature swing (precision)", defaultValue: "1.0", required: true, range: "0.4..5.0" // TODO: watch range, causes Android 2.0.7 to crash
                     }
@@ -196,11 +207,26 @@ private getMAX_HEAT_TEMP_C() { 28 }
 private getMIN_COOL_TEMP_C() { 15 }
 private getMAX_COOL_TEMP_C() { 30 }
 
+private getAllThermostats() { ((thermostats ?: []) + (heatingThermostats ?: []) + (coolingThermostats ?: [])).unique { a, b -> a.id <=> b.id } }
+
+def uninstalled() {
+    log.info "Uninstalled called"
+    authUpdate("uninstall")
+}
+
 def installed() {
+    log.debug "Installed"
+    authUpdate("install")
+    state.sendUpdate = false
 	subscribeToEvents()
 }
 
 def updated() {
+    log.debug "Updated"
+    if (state.sendUpdate) {
+        authUpdate("update")
+        state.sendUpdate = false
+    }
 	subscribeToEvents()
 }
 
@@ -218,7 +244,7 @@ def subscribeToEvents() {
 
     def maxModes = multiTempModes ? (modes == null ? 1 : modes.size()) : 1
     for (int j = 0; j < maxModes; j++) {
-        def maxThermostats = multiTempThermostat ? thermostats?.size() : 1
+        def maxThermostats = multiTempThermostat ? allThermostats?.size() : 1
         for (int i = 0; i < maxThermostats; i++) {
             subscribe(settings."remoteTemperatureSensor${i}${j}", "temperature", remoteChangeHandler) // Handle changes in remote temperature sensor and readjust thermostat
             subscribe(settings."openDoors${i}${j}", "contact", doorContactHandler) // Handle open/closed door/windows contact sensors
@@ -227,6 +253,8 @@ def subscribeToEvents() {
 
     subscribe(thermostats, "heatingSetpoint", thermostatSetTempHandler) // Handle changes in manual thermostat heating setpoint temperature changes for Hold mode
     subscribe(thermostats, "coolingSetpoint", thermostatSetTempHandler) // Handle changes in manual thermostat cooling setpoint temperature changes for Hold mode
+    subscribe(heatingThermostats, "heatingSetpoint", thermostatSetTempHandler) // Handle changes in manual thermostat heating setpoint temperature changes for Hold mode
+    subscribe(coolingThermostats, "coolingSetpoint", thermostatSetTempHandler) // Handle changes in manual thermostat cooling setpoint temperature changes for Hold mode
     subscribe(location, modeChangeHandler) // Capture mode changes to reinitialize app
     subscribe(app, modeChangeHandler) // Capture user intent to reset temp hold
     
@@ -247,7 +275,7 @@ def modeChangeHandler(evt) {
     	return
     }
     
-    thermostats?.each { atomicState."holdTemp${it}" = false } // Reset temporary hold mode
+    allThermostats?.each { atomicState."holdTemp${it}" = false } // Reset temporary hold mode
 
     runEvery5Minutes(checkAndSetStates) // Check if the thermostat actually changed states
     checkAndSetStates(true)
@@ -283,24 +311,24 @@ def checkAndSetStates(sendMsg = false) {
         }
     }
 
-    def maxThermostats = thermostats?.size()
+    def maxThermostats = allThermostats?.size()
     for (int count = 0; count < maxThermostats; count++) {
-        int i = multiTempThermostat ? count : 0
+        int i = multiTempThermostat ? count : 0 // Check if we have single setting for all thermostats or individual settings
         def coolingSetpoint = settings."opCoolSet${i}${j}"
         def heatingSetpoint = settings."opHeatSet${i}${j}"
 
-        if (atomicState."holdTemp${thermostats[count]}") {  // If we are on hold temp mode for this thermostat
-            log.trace "Thermostat ${thermostats[count]} is in hold temperature mode, not making any changes to thermostat"    
+        if (atomicState."holdTemp${allThermostats[count]}") {  // If we are on hold temp mode for this thermostat
+            log.trace "Thermostat ${allThermostats[count]} is in hold temperature mode, not making any changes to thermostat"    
             continue // Move onto the next thermostat
         }
 
         if (sendMsg) {
-            def msg = "Set ${thermostats[count]} Heat ${heatingSetpoint}°, Cool ${coolingSetpoint}° on ${location.mode} mode"
+            def msg = "Set ${allThermostats[count]} Heat ${heatingSetpoint}°, Cool ${coolingSetpoint}° on ${location.mode} mode"
             log.info msg
             msgs << msg
         }
         
-        setActiveTemperature(thermostats[count], i, j, (sendMsg ? !batterySaver : false)) // Since this is done periodically don't force set the setpoints unless called by modechange handler
+        setActiveTemperature(allThermostats[count], i, j, (sendMsg ? !batterySaver : false)) // Since this is done periodically don't force set the setpoints unless called by modechange handler
     }
 
     msgs.each { msg ->
@@ -356,15 +384,15 @@ def doorContactCheck(evt) {
         if (!((modeName == location.mode) || (modeName == "All"))) { // check for matching mode in loop
             continue // Not our mode
         }
-        def maxThermostats = thermostats?.size()
+        def maxThermostats = allThermostats?.size()
         for (int count = 0; count < maxThermostats; count++) {
             int i = multiTempThermostat ? count : 0
             if(settings."openDoors${i}${j}"*.id?.contains(evt.device.id)) {
         		def msg = ""
                 if (settings."openDoors${i}${j}".any { it.currentValue("contact") == "open" }) { // When any sensor is opened, disabled HVAC/appliances
                     atomicState."openDoors${i}${j}" = true // We have an open door
-                    atomicState."holdTemp${thermostats[count]}" = false // Reset temp hold
-                    msg = "${settings."openDoors${i}${j}".find { it.currentValue("contact") == "open" }?.displayName} opened, turning off ${thermostats[count].displayName}"
+                    atomicState."holdTemp${allThermostats[count]}" = false // Reset temp hold
+                    msg = "${settings."openDoors${i}${j}".find { it.currentValue("contact") == "open" }?.displayName} opened, turning off ${allThermostats[count].displayName}"
                 } else if (atomicState."openDoors${i}${j}") { // If all sensors are closed from an earlier open, reset the the HVAC/appliances settings as per schedule
                     atomicState."openDoors${i}${j}" = false // Reset it
                     msg = "All door/window sensors are closed, resuming HVAC/applicance operation"
@@ -373,7 +401,7 @@ def doorContactCheck(evt) {
 				if (msg) { // If any action is required
                     log.debug msg
                     msgs << msg
-                	setActiveTemperature(thermostats[count], i, j, !batterySaver) // Update thermostat state
+                	setActiveTemperature(allThermostats[count], i, j, !batterySaver) // Update thermostat state
                 }
             }
         }
@@ -401,10 +429,10 @@ def thermostatSetTempHandler(evt) {
         if (!((modeName == location.mode) || (modeName == "All"))) { // check for matching mode in loop
             continue // this isn't our mode, ignore it
         }
-        def maxThermostats = thermostats?.size()
+        def maxThermostats = allThermostats?.size()
         for (int count = 0; count < maxThermostats; count++) {
-            int i = multiTempThermostat ? count : 0
-            if (thermostats[count].id.contains(evt.device.id)) { // Find the thermostat which reported this change
+            int i = multiTempThermostat ? count : 0 // Check if we have one setting for all thermostats or individual settings
+            if (allThermostats[count].id.contains(evt.device.id)) { // Find the thermostat which reported this change
                 def remoteTemperatureSensor = settings."remoteTemperatureSensor${i}${j}"
                 def coolingSetpoint = settings."opCoolSet${i}${j}"
                 def heatingSetpoint = settings."opHeatSet${i}${j}"
@@ -433,7 +461,7 @@ def thermostatSetTempHandler(evt) {
                         def msg = "${app.label}: Temporary hold feature not enabled, ignoring ${evt.device.displayName} ${evt.name} override ${evt.value}°${remoteTemperatureSensor ? '. Using ' + remoteTemperatureSensor + ' remote temperature sensor' : ''}"
                         atomicState."holdTemp${evt.device}" = false
                         log.warn msg
-                        setActiveTemperature(thermostats[count], i, j, false) // Reset setpoints, since we get this notification when setpoints change, don't force set them again to avoid a loop
+                        setActiveTemperature(allThermostats[count], i, j, false) // Reset setpoints, since we get this notification when setpoints change, don't force set them again to avoid a loop
                         sendNotificationEvent(msg) // Do it in the end to avoid a timeout
                         return // We're done
                     }
@@ -466,14 +494,14 @@ def remoteChangeHandler(evt) {
         if (!((modeName == location.mode) || (modeName == "All"))) { // check for matching mode in loop
             continue // this isn't our mode, ignore it
         }
-        def maxThermostats = thermostats?.size()
+        def maxThermostats = allThermostats?.size()
         for (int count = 0; count < maxThermostats; count++) {
-            int i = multiTempThermostat ? count : 0
+            int i = multiTempThermostat ? count : 0 // Check if we have one setting for all thermostats or individual settings
             if(settings."remoteTemperatureSensor${i}${j}"*.id?.contains(evt.device.id)) {
-                if (atomicState."holdTemp${thermostats[count]}") { // If we are on hold temp mode then ignore temperature changes since user has put it on hold mode
-                    log.trace "Thermostat ${thermostats[count]} is in hold temperature mode, not making any changes to thermostat based on remote temp sensor"
+                if (atomicState."holdTemp${allThermostats[count]}") { // If we are on hold temp mode then ignore temperature changes since user has put it on hold mode
+                    log.trace "Thermostat ${allThermostats[count]} is in hold temperature mode, not making any changes to thermostat based on remote temp sensor"
                 } else {
-                    setActiveTemperature(thermostats[count], i, j, !batterySaver)
+                    setActiveTemperature(allThermostats[count], i, j, !batterySaver)
                 }
             }
         }
@@ -826,7 +854,7 @@ def checkForCodeUpdate(evt) {
                 }
                 
                 // Check device handler version updates
-                def caps = [ thermostats ]
+                def caps = [ allThermostats ]
                 caps?.each {
                     def devices = it?.findAll { it.hasAttribute("codeVersion") }
                     for (device in devices) {

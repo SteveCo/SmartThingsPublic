@@ -4,7 +4,7 @@
  * -----------------------
  *
  * STOP:  Do NOT PUBLISH the code to GitHub, it is a VIOLATION of the license terms.
- * You are NOT allowed to share, distribute, reuse or publicly host (e.g. GITHUB) the code. Refer to the license details on our website.
+ * You are NOT allowed to modify, share, distribute, reuse or publicly host (e.g. GITHUB) the code. Refer to the license details on our website.
  *
  */
 
@@ -20,7 +20,7 @@
 * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
 */ 
 
-def clientVersion() { "07.13.04" }
+def clientVersion() { "07.15.05" }
 
 /**
 * Add and remove multiple user codes for locks with Scheduling and notification options and local actions
@@ -28,6 +28,20 @@ def clientVersion() { "07.13.04" }
 * Copyright RBoy Apps, redistribution or reuse of code is not allowed without permission
 *
 * Change Log:
+* 2021-03-02 - (v07.15.05) ADT deprecated by SmartThings
+* 2020-11-16 - (v07.15.03) Skip door if the user accidentally left out the open door notify or relock timeout
+* 2020-11-07 - (v07.15.02) Added FAQ link
+* 2020-10-27 - (v07.15.01) Check for invalid DTH
+* 2020-10-19 - (v07.15.00) Refresh users page once a minute to see user status updates
+* 2020-10-06 - (v07.14.02) Don't enable ADT direct control by default when a keypad is detected
+* 2020-10-05 - (v07.14.01) Fix 0 digit warning from some locks, added option to manually clear codes from the lock from advanced settings, show warning if user type isn't selected
+* 2020-10-01 - (v07.13.11) Fix missing initial lock notification when using a delay timer
+* 2020-09-15 - (v07.13.10) Update garage door controls to support new capabilities
+* 2020-09-08 - (v07.13.09) Update for new platform capability model
+* 2020-09-01 - (v07.13.08) Update for retirement of Classic app
+* 2020-08-19 - (v07.13.07) Add option to arm ADT to away for manual locking
+* 2020-08-17 - (v07.13.06) Only post one message when locks stop responding
+* 2020-08-11 - (v07.13.05) Detect deleted routines after a migration
 * 2020-08-05 - (v07.13.04) Dont' send code upgrade notifications
 * 2020-07-29 - (v07.13.03) Fix for Door open/close actions when using multiple doors on Android Classic app
 * 2020-07-26 - (v07.13.01) New app/platform improvements
@@ -296,7 +310,7 @@ def setupApp() {
 
     dynamicPage(name: "setupApp", title: "Lock User Management v${clientVersion()}", install: true, uninstall: true) {
         if (state.clientVersion) { // If the app has already been installed
-            section("Select Lock(s)") {
+            section("Select Locks") {
                 // Check if the lock pin code length match on all the locks
                 def pinDetails = getLockPinLengthDetails()
                 def pinLen = pinDetails.pinLen // Fixed pin code length
@@ -308,14 +322,20 @@ def setupApp() {
                     def msg = "YOUR LOCKS ARE CONFIGURED TO ACCEPT DIFFERENT CODE DIGIT LENGTHS, PROGRAMMING MAY FAIL!"
                     paragraph title: msg, required: true, ""
                 }
-                input "locks", "capability.lock", title: "Lock(s)", required: false, multiple: true, submitOnChange: true, image: "https://www.rboyapps.com/images/HandleLock.png"
+                for (lock in locks) {
+                    if (!lock.hasCommand("setCode")) {
+                        def msg = "${lock} IS USING A DEVICE HANDLER WHICH DOES NOT SUPPORT PROGRAMMING!"
+                        paragraph title: msg, required: true, ""
+                    }
+                }
+                input "locks", "capability.lock", title: "Locks", description: "Select all locks to manage", required: false, multiple: true, submitOnChange: true, image: "https://www.rboyapps.com/images/HandleLock.png"
             }
 
             section("User Management") {
                 log.trace "state.previousMaxUserNames: ${state.previousMaxUserNames?.inspect()}, maxUserNames: ${maxUserNames?.inspect()}"
                 // Bug in ST Classic app, if users presses back on new installation without pressing Save, it saves the default values as a String
                 if ((maxUserNames != null) && ((state.previousMaxUserNames as Integer) > (maxUserNames as Integer))) { // If the number of max users has reduced, then clear excess the slots
-                    log.debug "Detected a reduction in number of maxUserNames, clearing rental user slots ${(maxUserNames as Integer) + 1} to ${(state.previousMaxUserNames as Integer)}"
+                    log.debug "Detected a reduction in number of maxUserNames, clearing user slots ${(maxUserNames as Integer) + 1} to ${(state.previousMaxUserNames as Integer)}"
                     startTimer(1, removeUsersOffline, [ data : [start: ((maxUserNames as Integer) + 1), end: (state.previousMaxUserNames as Integer)] ]) // Clear the slots
                 } // Clear excess users offline so it doesn't slow down the UI (do it while reducing users so that when you increase the slots are already cleared)
 
@@ -337,6 +357,10 @@ def setupApp() {
                 href(name: "notifications", params: hrefParams, title: "Notifications", page: "notificationsPage", description: "", required: false, image: "https://www.rboyapps.com/images/NotificationsD.png")
             }
 
+            section("Help") {
+                href(name: "help", title: "FAQ", description: "Frequently asked questions", style: "external", url: "https://smartthings.rboyapps.com/LUM-FAQ.htm", required: false, image: "https://www.rboyapps.com/images/FAQ.png")
+            }
+
             section() {
                 label title: "Assign a name for this SmartApp (optional)", required: false
                 input name: "updateNotifications", title: "Check for new versions of the app", type: "bool", defaultValue: true, required: false
@@ -348,7 +372,10 @@ def setupApp() {
                 paragraph "Change this setting if all the user codes aren't being programmed on the lock correctly. This settings determines the time gap between sending each user code to the lock. If the codes are sent too fast, they may fail to be set properly"
                 input name: "sendDelay", title: "Delay between codes (seconds):", type: "number", defaultValue: "${defaultSendDelay}", range: "5..120", required: false
                 paragraph "Enable this to get additional detailed notifications like code programming, lock responses etc. NOTE: this can generate a lot of messages"
-                input name: "detailedNotifications", title: "Get detailed notifications", type: "bool", defaultValue: "false", required: false
+                input name: "detailedNotifications", title: "Get detailed notifications", type: "bool", defaultValue: false, required: false
+                paragraph ""
+                paragraph title: "[WARNING] CLEAR USER CODES", "ENABLING THIS OPTION WILL CLEAR THE FIRST ${(maxUserNames as Integer) ?: 0} USER CODES FROM EACH OF THE LOCKS SELECTED ABOVE. AFTER ENABLING THIS OPTION, CLICK 'DONE' AND WAIT FOR THE CLEARING TO TAKE EFFECT", required: true
+                input name: "clearUserCodes", title: "CLEAR EXISTING USER CODES", type: "bool", defaultValue: false, required: false
             }
         } else {
             section() {
@@ -528,12 +555,9 @@ def unlockLockActionsPage(params) {
     log.trace "Lock/Unlock Action Page, user:$user, name:$name, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"unlockLockActionsPage", title: (user ? "Setup custom actions/notifications for ${name ?: "user ${user}"}" : "Setup lock/unlock actions for each door"), uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
         def showActions = true
-        if (!phrases) {
-            log.warn "No Routines found!!!"
-        }
         section {
             if (user) { // User specific override options
                 paragraph "Enabling custom user actions and notifications will override over the general actions defined on the first page"
@@ -624,39 +648,36 @@ def unlockKeypadActionsPage(params) {
     log.trace "Keypad Unlock Action Page, user:$user, name:$name, lock $lock, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"unlockKeypadActionsPage", title: "Setup keypad unlock actions for doors" + (user ? " for user $name." : ""), uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
-        if (!phrases) { // This should not happen, it should be taken care of in parent page
-            log.warn "No Routines found!!!"
-        }
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
 
         section ("Door Keypad Unlock Actions${lock ? " for $lock" : ""}") {
-            def priorHomePhrase = settings."homePhrase${lock}${user}"
+            //def priorHomePhrase = settings."homePhrase${lock}${user}"
             def priorHomeMode = settings."homeMode${lock}${user}"
             def isLockKeypad = locks?.find{ it.displayName == lock }?.hasAttribute("armMode") // Check if the current lock (lock specific option) is a keypad
             def isAnyLockKeypad = locks?.any { keypad -> keypad.hasAttribute("armMode") } // Check if any lock (for global options) is a keypad
             def areAllLockKeypad = locks?.every { keypad -> keypad.hasAttribute("armMode") } // Check every lock (for global options) is a keypad
             
             paragraph "Run these actions when a user successfully unlocks the door using a code"
-            if (lock ? isLockKeypad : isAnyLockKeypad) { // Show only if we have a supported keypad (for selected lock or for general settings)
-                input "keypadArmDisarm${lock}${user}", "bool", title: "Control SHM/ADT using keypad", required: false, submitOnChange: true, defaultValue: true
+            /*if (lock ? isLockKeypad : isAnyLockKeypad) { // Show only if we have a supported keypad (for selected lock or for general settings)
+                input "keypadArmDisarm${lock}${user}", "bool", title: "Control ADT using keypad", required: false, submitOnChange: true, defaultValue: false
             }
-            if (lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true)) { // Hide only if we have have a supported keypad for selected lock and using keypad to control SHM
-                input "homeDisarm${lock}${user}", "bool", title: "Disarm Classic SHM", required: false
+            if (lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true)) { // Hide only if we have have a supported keypad for selected lock and using keypad to control SHM
+                //input "homeDisarm${lock}${user}", "bool", title: "Disarm Classic SHM", required: false
                 input "adtDisarm${lock}${user}", "bool", title: "Disarm ADT", required: false, submitOnChange: true
             }
-            if (((lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true)) && settings."adtDisarm${lock}${user}") ||
-                ((lock ? isLockKeypad : isAnyLockKeypad) && (settings."keypadArmDisarm${lock}${user}" != false))) { // If we have a seleted an ADT option
-                input "adtDevices", "capability.battery", title: "Select ADT panel${settings."adtDisarm${lock}${user}" ? "" : " (optional)"}", multiple: false, required: (settings."adtDisarm${lock}${user}" ? true : false) // Required if we select ADT
-            }
-            input "homePhrase${lock}${user}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorHomePhrase
+            if (((lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true)) && settings."adtDisarm${lock}${user}") ||
+                ((lock ? isLockKeypad : isAnyLockKeypad) && (settings."keypadArmDisarm${lock}${user}"))) { // If we have a seleted an ADT option
+                input "adtDevices", "capability.battery", title: "Select ADT panel${true || settings."adtDisarm${lock}${user}" ? "" : " (optional)"}", multiple: false, required: (true || settings."adtDisarm${lock}${user}" ? true : false) // Required if we select ADT
+            }*/
+            //input "homePhrase${lock}${user}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorHomePhrase
             input "homeMode${lock}${user}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
             input "turnOnSwitchesAfterSunset${lock}${user}", "capability.switch", title: "Turn on light(s) after dark", required: false, multiple: true
             input "turnOnSwitches${lock}${user}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "turnOffSwitches${lock}${user}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
             input "toggleSwitches${lock}${user}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
             input "unlockLocks${lock}${user}","capability.lock", title: "Unlock lock(s)", required: false, multiple: true
-            input "openGarage${lock}${user}","capability.garageDoorControl", title: "Open garage door(s)", required: false, multiple: true
+            input "openGarage${lock}${user}","capability.doorControl", title: "Open garage door(s)", required: false, multiple: true
 
             paragraph title: "Do NOT run the above unlock actions for door${lock ? " $lock" : ""} under any of the following conditions", required: true, ""
             input "runXPeopleUnlockActions${lock}${user}", "capability.presenceSensor", title: "...when any these people are present", required: false, multiple: true
@@ -686,30 +707,27 @@ def unlockManualActionsPage(params) {
     log.trace "Manual Unlock Action Page, lock $lock, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"unlockManualActionsPage", title: "Setup manual unlock actions for doors", uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
-        if (!phrases) { // This should not happen, it should be taken care of in parent page
-            log.warn "No Routines found!!!"
-        }
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
 
         section ("Door Manual Unlock Actions${lock ? " for $lock" : ""}") {
-            def priorHomePhrase = settings."homePhraseManual${lock}"
+            //def priorHomePhrase = settings."homePhraseManual${lock}"
             def priorHomeMode = settings."homeModeManual${lock}"
             def priorManualNotify = settings."manualNotify${lock}"
 
             paragraph "Run these actions when a user unlocks the door manually"
-            input "homeDisarmManual${lock}", "bool", title: "Disarm Classic SHM", required: false
-            input "adtDisarmManual${lock}", "bool", title: "Disarm ADT", required: false, submitOnChange: true
+            //input "homeDisarmManual${lock}", "bool", title: "Disarm Classic SHM", required: false
+            /*input "adtDisarmManual${lock}", "bool", title: "Disarm ADT", required: false, submitOnChange: true
             if (settings."adtDisarmManual${lock}") { // If we have a seleted an ADT option
                 input "adtDevices", "capability.battery", title: "Select ADT panel", multiple: false, required: true // Required if we select ADT
-            }
-            input "homePhraseManual${lock}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorHomePhrase
+            }*/
+            //input "homePhraseManual${lock}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorHomePhrase
             input "homeModeManual${lock}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
             input "turnOnSwitchesAfterSunsetManual${lock}", "capability.switch", title: "Turn on light(s) after dark", required: false, multiple: true
             input "turnOnSwitchesManual${lock}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "turnOffSwitchesManual${lock}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
             input "unlockLocksManual${lock}","capability.lock", title: "Unlock lock(s)", required: false, multiple: true
-            input "openGarageManual${lock}","capability.garageDoorControl", title: "Open garage door(s)", required: false, multiple: true
+            input "openGarageManual${lock}","capability.doorControl", title: "Open garage door(s)", required: false, multiple: true
 
             paragraph title: "Do NOT run the above unlock actions for door${lock ? " $lock" : ""} under any of the following conditions", required: true, ""
             input "runXPeopleUnlockActionsManual${lock}", "capability.presenceSensor", title: "...when any these people are present", required: false, multiple: true
@@ -746,25 +764,22 @@ def armKeypadActionsPage(params) {
     log.trace "Arm Keypad Action Page, user:$user, name:$name, lock $lock, arm $arm, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"armKeypadActionsPage", title: "Setup Arm ${arm?.capitalize()} button actions for ${lock ?: "keypad"}" + (user ? " for user $name." : ""), uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
-        if (!phrases) { // This should not happen, it should be taken care of in parent page
-            log.warn "No Routines found!!!"
-        }
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
 
         section {
             input "keypadArmActions${lock}${user}${arm}", "bool", title: "Enable custom actions", required: false, submitOnChange: true
             if (settings."keypadArmActions${lock}${user}${arm}") {
-                def priorLockPhrase = settings."externalLockPhrase${lock}${user}${arm}"
+                //def priorLockPhrase = settings."externalLockPhrase${lock}${user}${arm}"
                 def priorHomeMode = settings."externalLockMode${lock}${user}${arm}"
 
-                input "externalLockPhrase${lock}${user}${arm}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
+                //input "externalLockPhrase${lock}${user}${arm}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
                 input "externalLockMode${lock}${user}${arm}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
                 input "externalLockTurnOnSwitches${lock}${user}${arm}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
                 input "externalLockTurnOffSwitches${lock}${user}${arm}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
                 input "externalLockToggleSwitches${lock}${user}${arm}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
                 input "lockLocks${lock}${user}${arm}","capability.lock", title: "Lock lock(s)", required: false, multiple: true
-                input "closeGarage${lock}${user}${arm}","capability.garageDoorControl", title: "Close garage door(s)", required: false, multiple: true
+                input "closeGarage${lock}${user}${arm}","capability.doorControl", title: "Close garage door(s)", required: false, multiple: true
             }
         }
     }
@@ -796,34 +811,31 @@ def lockKeypadActionsPage(params) {
     log.trace "Keypad Lock Action Page, user:$user, name:$name, lock $lock, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"lockKeypadActionsPage", title: "Setup keypad lock actions for doors" + (user ? " for user $name." : ""), uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
-        if (!phrases) { // This should not happen, it should be taken care of in parent page
-            log.warn "No Routines found!!!"
-        }
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
 
         section ("Door Keypad Lock Actions${lock ? " for $lock" : ""}") {
-            def priorLockPhrase = settings."externalLockPhrase${lock}${user}"
+            //def priorLockPhrase = settings."externalLockPhrase${lock}${user}"
             def priorHomeMode = settings."externalLockMode${lock}${user}"
             def isLockKeypad = locks?.find{ it.displayName == lock }?.hasAttribute("armMode") // Check if the current lock (lock specific option) is a keypad
             def isAnyLockKeypad = locks?.any { keypad -> keypad.hasAttribute("armMode") } // Check if any lock (for global options) is a keypad
             def areAllLockKeypad = locks?.every { keypad -> keypad.hasAttribute("armMode") } // Check every lock (for global options) is a keypad
             
             paragraph "Some locks can be locked from the keypad outside${user ? " with user codes" : ""}. If your lock has his feature then you can assign actions to execute when it is locked ${user ? "with a user code" : "from the keypad"}"
-            if (lock ? isLockKeypad : isAnyLockKeypad) { // Show only if we have a supported keypad (for selected lock or for general settings)
-                input "keypadArmDisarm${lock}${user}", "bool", title: "Control SHM/ADT using keypad", required: false, submitOnChange: true, defaultValue: true
+            /*if (lock ? isLockKeypad : isAnyLockKeypad) { // Show only if we have a supported keypad (for selected lock or for general settings)
+                input "keypadArmDisarm${lock}${user}", "bool", title: "Control ADT using keypad", required: false, submitOnChange: true, defaultValue: false
             }
-            if (lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true)) { // Hide only if we have have a supported keypad for selected lock and using keypad to control SHM
-                input "homeArm${lock}${user}", "bool", title: "Arm Classic SHM to Away", required: false, submitOnChange: true
+            if (lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true)) { // Hide only if we have have a supported keypad for selected lock and using keypad to control SHM
+                //input "homeArm${lock}${user}", "bool", title: "Arm Classic SHM to Away", required: false, submitOnChange: true
                 input "adtArm${lock}${user}", "bool", title: "Arm ADT to Away", required: false, submitOnChange: true
-                if (settings."homeArm${lock}${user}" || settings."adtArm${lock}${user}") {
+                if (settings."adtArm${lock}${user}") { // || settings."homeArm${lock}${user}"
                     input "homeArmStay${lock}${user}", "bool", title: "...arm to Stay instead of Away", required: false
                 }
             }
-            if (((lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}" != false) : true)) && settings."adtArm${lock}${user}") ||
-                ((lock ? isLockKeypad : isAnyLockKeypad) && (settings."keypadArmDisarm${lock}${user}" != false))) { // If we have a seleted an ADT option
-                input "adtDevices", "capability.battery", title: "Select ADT panel${settings."adtArm${lock}${user}" ? "" : " (optional)"}", multiple: false, required: (settings."adtArm${lock}${user}" ? true : false) // Required if we select ADT
-            }
+            if (((lock ? (isLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true) : (areAllLockKeypad ? !(settings."keypadArmDisarm${lock}${user}") : true)) && settings."adtArm${lock}${user}") ||
+                ((lock ? isLockKeypad : isAnyLockKeypad) && (settings."keypadArmDisarm${lock}${user}"))) { // If we have a seleted an ADT option
+                input "adtDevices", "capability.battery", title: "Select ADT panel${true || settings."adtArm${lock}${user}" ? "" : " (optional)"}", multiple: false, required: (true || settings."adtArm${lock}${user}" ? true : false) // Required if we select ADT
+            }*/
             if (lock ? isLockKeypad : isAnyLockKeypad) { // Show only if we have a supported keypad (for selected lock or for general settings)
                 def hrefParams = [
                     user: user,
@@ -834,13 +846,13 @@ def lockKeypadActionsPage(params) {
                 href(name: "armStayKeypadActions${lock}", params: hrefParams + [arm: "stay"], title: "Stay/Partial button actions", page: "armKeypadActionsPage", description: "", required: false, image: "")
                 href(name: "armNightKeypadActions${lock}", params: hrefParams + [arm: "night"], title: "Night button actions", page: "armKeypadActionsPage", description: "", required: false, image: "")
             }
-            input "externalLockPhrase${lock}${user}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
+            //input "externalLockPhrase${lock}${user}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
             input "externalLockMode${lock}${user}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
             input "externalLockTurnOnSwitches${lock}${user}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "externalLockTurnOffSwitches${lock}${user}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
             input "externalLockToggleSwitches${lock}${user}", "capability.switch", title: "Toggle switch(s)", required: false, multiple: true
             input "lockLocks${lock}${user}","capability.lock", title: "Lock lock(s)", required: false, multiple: true
-            input "closeGarage${lock}${user}","capability.garageDoorControl", title: "Close garage door(s)", required: false, multiple: true
+            input "closeGarage${lock}${user}","capability.doorControl", title: "Close garage door(s)", required: false, multiple: true
 
             input "delayLockActionsTime${lock}${user}", "number", title: "Delay running actions (minutes)", required: false, range: "0..*"
 
@@ -881,27 +893,25 @@ def lockManualActionsPage(params) {
     log.trace "Manual Lock Action Page, lock $lock, passed params: $params, saved params:$atomicState.params"
 
     dynamicPage(name:"lockManualActionsPage", title: "Setup manual lock actions for doors", uninstall: false, install: false) {
-        def phrases = location.helloHome?.getPhrases()
-        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines
-        if (!phrases) { // This should not happen, it should be taken care of in parent page
-            log.warn "No Routines found!!!"
-        }
+        /*def phrases = location.helloHome?.getPhrases()
+        phrases = phrases ? phrases*.label?.sort() - null : [] // Check for null ghost routines*/
 
         section ("Door Manual Lock Actions${lock ? " for $lock" : ""}") {
-            def priorLockPhrase = settings."externalLockPhraseManual${lock}"
+            //def priorLockPhrase = settings."externalLockPhraseManual${lock}"
             def priorHomeMode = settings."externalLockModeManual${lock}"
 
-            input "homeArmManual${lock}", "bool", title: "Arm Classic SHM to Stay", required: false
-            input "adtArmManual${lock}", "bool", title: "Arm ADT to Stay", required: false, submitOnChange: true
+            //input "homeArmManual${lock}", "bool", title: "Arm Classic SHM to Stay", required: false
+            /*input "adtArmManual${lock}", "bool", title: "Arm ADT to Stay", required: false, submitOnChange: true
             if (settings."adtArmManual${lock}") { // If we have a seleted an ADT option
+                input "homeArmAwayManual${lock}", "bool", title: "...arm to Away instead of Stay", required: false
                 input "adtDevices", "capability.battery", title: "Select ADT panel", multiple: false, required: true // Required if we select ADT
-            }
-            input "externalLockPhraseManual${lock}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
+            }*/
+            //input "externalLockPhraseManual${lock}", "enum", title: "Run routine", required: false, options: phrases, defaultValue: priorLockPhrase
             input "externalLockModeManual${lock}", "mode", title: "Change mode to", required: false, multiple: false, defaultValue: priorHomeMode
             input "externalLockTurnOnSwitchesManual${lock}", "capability.switch", title: "Turn on switch(s)", required: false, multiple: true
             input "externalLockTurnOffSwitchesManual${lock}", "capability.switch", title: "Turn off switch(s)", required: false, multiple: true
             input "lockLocksManual${lock}","capability.lock", title: "Lock lock(s)", required: false, multiple: true
-            input "closeGarageManual${lock}","capability.garageDoorControl", title: "Close garage door(s)", required: false, multiple: true
+            input "closeGarageManual${lock}","capability.doorControl", title: "Close garage door(s)", required: false, multiple: true
 
             input "delayLockActionsTimeManual${lock}", "number", title: "Delay running actions (minutes)", required: false, range: "0..*"
 
@@ -919,7 +929,7 @@ def lockManualActionsPage(params) {
 }
 
 def usersPage() {
-    dynamicPage(name:"usersPage", title: "User Names, Codes and Notification Setup", uninstall: false, install: false) {
+    dynamicPage(name:"usersPage", title: "User Names, Codes and Notification Setup", uninstall: false, install: false, refreshInterval: 60) {
 
         if (!maxUserNames) {
             section("No users to configure") {
@@ -1101,7 +1111,13 @@ def usersPage() {
                         	userSlotActive = false
                         	break
                             
+                        case 'Permanent':
+                        	break
+                            
                         default:
+                            def msg = "No user type selected!"
+                            userSummary += (userSummary ? "\n" : "") + msg
+                        	userSlotActive = false // if there's no user type, it's deleted
                             break
                     }
                     
@@ -1347,8 +1363,14 @@ def userConfigPage(params) {
                         userSlotActive = false
                         break
 
+                    case 'Permanent':
+        	            break
+
                     default:
-                        break
+                        def msg = "No user type selected!"
+                        paragraph title: msg, required: true, ""
+	                    userSlotActive = false // if there's no user type, it's deleted
+    	                break
                 }
             } else if (priorName) { // Incomplete configuration
                 def msg = "No code defined!"
@@ -1549,9 +1571,9 @@ private getLockPinLengthDetails(subLocks = locks) {
     def pinLenError = false
 
     for (lock in subLocks) {
-        def codeLen = lock.hasAttribute("pinLength") ? lock.currentValue("pinLength") : (lock.hasAttribute("codeLength") ? lock.currentValue("codeLength") : null)
-        def maxCodeLen = lock.hasAttribute("maxPINLength") ? lock.currentValue("maxPINLength") : null
-        def minCodeLen = lock.hasAttribute("minPINLength") ? lock.currentValue("minPINLength") : null
+        def codeLen = (lock.currentValue("codeLength") ?: (lock.currentValue("pinLength") ?: null)) as Integer
+        def maxCodeLen = (lock.currentValue("maxCodeLength") ?: (lock.currentValue("maxPINLength") ?: null)) as Integer
+        def minCodeLen = (lock.currentValue("minCodeLength") ?: (lock.currentValue("minPINLength") ?: null)) as Integer
         //log.trace "$lock fixed code length: $codeLen, max code length: $maxCodeLen, min code length: $minCodeLen"
         if (codeLen && pinLen) { // If lock has fixed pin length and previous lock also had fixed pin length
             if ((codeLen != pinLen) || (maxPinLen && (codeLen > maxPinLen)) || (minPinLen && (codeLen < minPinLen))) { // Check if we have pin mismatches
@@ -1582,8 +1604,7 @@ def installed() {
     log.debug "Install Settings: $settings"
     authUpdate("install")
     state.sendUpdate = false
-    state.clearCodes = true // On a fresh install start by clearing all codes to avoid issues
-    appTouch()
+    runIn(1, appTouch) // The platform calls update after installed, so avoid a duplicate run
 }
 
 def updated() {
@@ -1592,9 +1613,7 @@ def updated() {
         authUpdate("update")
         state.sendUpdate = false
     }
-    if (!state.clearCodes) { // Some bug in the platform, calls updated on install so skip it
-        appTouch()
-    }
+    runIn(1, appTouch)
 }
 
 def appTouch() {
@@ -1627,9 +1646,9 @@ def appTouch() {
         // Check if the lock pin code length match the pin code length entered by the user
         def userLocks = (locks?.size() > 1) ? (settings."userLocks${i}" ?: locks*.id) : locks*.id // If not defined or only one lock then check all locks
         for (lock in locks) {
-            def codeLen = lock.hasAttribute("pinLength") ? lock.currentValue("pinLength") : (lock.hasAttribute("codeLength") ? lock.currentValue("codeLength") : null)
-            def maxCodeLen = lock.hasAttribute("maxPINLength") ? lock.currentValue("maxPINLength") : null
-            def minCodeLen = lock.hasAttribute("minPINLength") ? lock.currentValue("minPINLength") : null
+            def codeLen = (lock.currentValue("codeLength") ?: (lock.currentValue("pinLength") ?: null)) as Integer
+            def maxCodeLen = (lock.currentValue("maxCodeLength") ?: (lock.currentValue("maxPINLength") ?: null)) as Integer
+            def minCodeLen = (lock.currentValue("minCodeLength") ?: (lock.currentValue("minPINLength") ?: null)) as Integer
             if (userLocks?.contains(lock.id) && (codeLen || (maxCodeLen && minCodeLen))) { // Check if the lock support reporting pin length and it has a valid number to report (not 0 or null)
                 if ((code1?.size() > 0) && (codeLen ? codeLen != code1.size() : ((code1.size() < minCodeLen) || (code1.size() > maxCodeLen)))) { // If we have a code to program
                     def name1 = settings."userNames${i}"
@@ -1679,10 +1698,10 @@ def appTouch() {
     subscribe(locks, "tamper", lockHandler) // Subscribe to tamper events
     subscribe(locks, "codeReport", codeResponse, [filterEvents:false]) // Subscribe to code report events to see if the code update was successful
     subscribe(locks, "codeChanged", codeResponse, [filterEvents:false]) // Subscribe to code report events to see if the code update was successful
-    subscribe(location, "alarmSystemStatus" , shmChangeHandler) // Subscribe to SHM state handler
-    if (adtDevices) {
+    //subscribe(location, "alarmSystemStatus" , shmChangeHandler) // Subscribe to SHM state handler
+    /*if (adtDevices) {
         subscribe(adtDevices, "securitySystemStatus" , adtChangeHandler) // Subscribe to ADT state handler
-    }
+    }*/
 
     // Reset the code update trackers and heartbeat system
     state.lastCheck = 0
@@ -1706,7 +1725,6 @@ def appTouch() {
     if (!state.lockCodes) {
         state.lockCodes = [:] // Save list of programmed codes, initialize only if not already done
     }
-    state.updateLockList = []
     state.expiredLockList = []
     atomicState.reLocks = [:] // List of lock to relock after a timed delay
     atomicState.notifyOpenDoors = [:] // List of locks to check for open notifications
@@ -1719,9 +1737,8 @@ def appTouch() {
         if (!state.lockCodes[lock.id]) {
             state.lockCodes[lock.id] = [:] /// Track programmed codes for this lock, initialize only if not already done
         }
-        state.updateLockList.add(lock.id) // reset the state for each lock to be processed with update
         state.expiredLockList.add(lock.id) // reset the state for each lock to be processed with expired
-        //log.trace "Added $lock id ${lock.id} to unprocessed locks update list ${state.updateLockList} and expire list ${state.expiredLockList}"
+        //log.trace "Added $lock id ${lock.id} to expire list ${state.expiredLockList}"
     }
     state.lockCodes.each { lockID, userMap ->
         if (!locks?.any { lock -> lock.id == lockID }) {
@@ -1729,12 +1746,11 @@ def appTouch() {
             state.lockCodes[lockID] = [:] /// Stop tracking codes from this lock once we exclude the lock from our main list
         }
     }        
-    state.updateNextCode = 1 // set next code to be set for the update loop
     state.expiredNextCode = 1 // set next code to be set for the expired loop
 
-    log.trace "Install complete, code updates starting with code $state.updateNextCode"
+    log.trace "Install complete"
 
-    if (state.clearCodes) {
+    if (clearUserCodes) {
         clearAllCodes()
     } else {
         kickStart() // Initialize codes
@@ -1829,7 +1845,7 @@ def adtChangeHandler(evt) {
     def msg = ""
     def keypads = locks?.findAll{ it.hasAttribute("armMode") } // Get all keypads and sync state with ADT
     // We don't check for individual user custom actions for keypads since synchronization needs to happen at the keypad level
-    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}" != false) } : (settings."keypadArmDisarm${""}${""}" != false ? keypads : null)) // Get keypads with direct control enabled
+    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}") } : (settings."keypadArmDisarm${""}${""}" ? keypads : null)) // Get keypads with direct control enabled
     def mode = settings."adtDevices"?.currentState("securitySystemStatus")?.value // This should the new ADT state
     if (keypads) {
         switch (mode) {
@@ -1853,7 +1869,7 @@ def adtChangeHandler(evt) {
                 break
         }
     } else {
-        log.trace "No keypads found under direct SHM/ADT control"
+        log.trace "No keypads found under direct ADT control"
     }
     
     if (keypads && msg) {
@@ -1868,7 +1884,7 @@ def shmChangeHandler(evt) {
     def msg = ""
     def keypads = locks?.findAll{ it.hasAttribute("armMode") } // Get all keypads and sync state with SHM
     // We don't check for individual user custom actions for keypads since synchronization needs to happen at the keypad level
-    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}" != false) } : (settings."keypadArmDisarm${""}${""}" != false ? keypads : null)) // Get keypads with direct control enabled
+    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}") } : (settings."keypadArmDisarm${""}${""}" ? keypads : null)) // Get keypads with direct control enabled
     def mode = location.currentState("alarmSystemStatus")?.value // This should the new SHM state
     if (keypads) {
         switch (mode) {
@@ -1892,7 +1908,7 @@ def shmChangeHandler(evt) {
                 break
         }
     } else {
-        log.trace "No keypads found under direct SHM/ADT control"
+        log.trace "No keypads found under direct SHM control"
     }
     
     if (keypads && msg) {
@@ -2009,6 +2025,16 @@ def reLockDoor() {
     reLocksIDs?.each { lockid, timestamp ->
         def lock = locks.find { it.id == lockid } // find the lock
         def lockSensor = settings."sensor${lock}" // Get the sensor for the lock
+
+        if (!settings."relockAfter${lock}") { // Check if the settings have changed
+            log.trace "No relock timeout specified for door ${lock} as settings/modes have changed"
+            //log.trace "Removing ${lockid} from the list of pending relocks"
+            def reLocks = atomicState.reLocks // We need to deference the atomicState object each time, https://community.smartthings.com/t/atomicstate-not-working/27827/6?u=rboy
+            reLocks.remove(lockid) // We are done with this lock, remove it from the list
+            atomicState.reLocks = reLocks // set it back to atomicState
+            return // move on
+        }
+        
         Long timeLeft = (((60 * 1000 * settings."relockAfter${lock}") + timestamp) - now())/1000 // timestamp and now() is in ms
         if (timeLeft <= 1) { // If we are within 1 second then go ahead since the timer isn't always 100% accurate
             if (settings."relockDoorModes${lock}" ? settings."relockDoorModes${lock}".find{it == location.mode} : true) { // Check if the mode is still active
@@ -2067,7 +2093,7 @@ def notifyOpenDoor() {
         def lock = locks.find { it.id == lockid } // find the lock
         def lockSensor = settings."sensor${lock}" // Get the sensor for the lock
         
-        if (!settings."openNotify${lock}" || (settings."openNotifyModes${lock}" && !(settings."openNotifyModes${lock}"?.find{it == location.mode}))) { // Check if the settings have changed
+        if (!settings."openNotify${lock}" || !settings."openNotifyTimeout${lock}" || (settings."openNotifyModes${lock}" && !(settings."openNotifyModes${lock}"?.find{it == location.mode}))) { // Check if the settings have changed
             log.trace "No need to monitor open sensor ${lockSensor} for door ${lock} as settings/modes have changed"
             //log.trace "Removing ${lockid} from the list of pending notifications"
             def notifyOpenDoors = atomicState.notifyOpenDoors // We need to deference the atomicState object each time, https://community.smartthings.com/t/atomicstate-not-working/27827/6?u=rboy
@@ -2211,7 +2237,7 @@ def codeResponse(evt) {
     }
     
     if ((state.lockCodes[lock.id].(user as String)) && (type == "renamed")) { // Only rename slots that we have in our list
-        def newName = desc?.split('" to "')?.last()?.replaceAll('"', '') // Get new name and remove quotes
+        def newName = desc?.split('" to "')?.last()?.replace('"', '') // Get new name and remove quotes
         if (newName && (newName != name)) { // Cannot be blank and should be different
             updateSetting("userNames${user}", newName)
             def msg = "$lock renamed user $user from $name to $newName"
@@ -2360,13 +2386,13 @@ def processUnlockEvent(evt) {
         } else {
             def msg = "$evt.displayName was unlocked $lockMode"
 
-            if (settings."homeDisarmManual${lockStr}") {
+            /*if (settings."homeDisarmManual${lockStr}") { // Sync SHM
                 log.info "Disarming Smart Home Monitor"
                 sendLocationEvent(name: "alarmSystemStatus", value: "off") // First do this to avoid false alerts from a slow platform
                 msg += detailedNotifications ? ", disarming Smart Home Monitor" : ""
-            }
+            }*/
             
-            try {
+            /*try {
                 if (settings."adtDisarmManual${lockStr}" && settings."adtDevices") {
                     log.info "Disarming ADT"
                     settings."adtDevices"?.disarm() // First do this to avoid false alerts from a slow platform
@@ -2375,7 +2401,7 @@ def processUnlockEvent(evt) {
             } catch (e) { // This is still not official so lets be cautious about it
                 log.error "Error disarming ADT\n$e"
                 msg += ", error disarming ADT"
-            }
+            }*/
 
             if (settings."homeModeManual${lockStr}") {
                 log.info "Changing mode to ${settings."homeModeManual${lockStr}"}"
@@ -2387,11 +2413,11 @@ def processUnlockEvent(evt) {
                 msg += detailedNotifications ? ", changing mode to ${settings."homeModeManual${lockStr}"}" : ""
             }
 
-            if (settings."homePhraseManual${lockStr}") {
+            /*if (settings."homePhraseManual${lockStr}" && location.helloHome?.getPhrases()) {
                 log.info "$evt.displayName was unlocked successfully, running routine ${settings."homePhraseManual${lockStr}"}"
                 location.helloHome.execute(settings."homePhraseManual${lockStr}") // First do this to avoid false alerts from a slow platform
                 msg += detailedNotifications ? ", running routine ${settings."homePhraseManual${lockStr}"}" : ""
-            }
+            }*/
 
             if (settings."turnOnSwitchesAfterSunsetManual${lockStr}") {
                 def cdt = new Date(now())
@@ -2477,40 +2503,40 @@ def processUnlockEvent(evt) {
             log.trace "Current mode is ${location.mode}, not running unlock actions for door $lock"
         } else {
             // If we have a specific mode passed by the keypad lets use that otherwise use configured options
-            if ((settings."keypadArmDisarm${lockStr}${user}" != false) && data?.armMode) {
+            if ((settings."keypadArmDisarm${lockStr}${user}") && data?.armMode) {
                 switch (data.armMode) { // Set Keypad lock state
                     case "disarmed":
-                    	log.info "Disarming Smart Home Monitor"
+                    	/*log.info "Disarming Smart Home Monitor" // Sync SHM
                     	sendLocationEvent(name: "alarmSystemStatus", value: "off") // First do this to avoid false alerts from a slow platform
-                        msg += detailedNotifications ? ", disarming Smart Home Monitor" : ""
-                        try {
+                        msg += detailedNotifications ? ", disarming Smart Home Monitor" : ""*/
+                        /*try {
                             if (settings."adtDevices") {
                                 log.info "Disarming ADT"
                                 settings."adtDevices"?.disarm() // First do this to avoid false alerts from a slow platform
                                 msg += detailedNotifications ? ", disarming ADT" : ""
                                 startTimer(1, adtChangeHandler) // If this came from a keypad and direct control for ADT is enabled, then refresh the keypad state (incase exit code beeping needs to be cancelled)
-                            } else {
-                                startTimer(1, shmChangeHandler) // If this came from a keypad and direct control for SHM is enabled, then refresh the keypad state (incase exit code beeping needs to be cancelled)
+                            //} else {
+                            //    startTimer(1, shmChangeHandler) // If this came from a keypad and direct control for SHM is enabled, then refresh the keypad state (incase exit code beeping needs to be cancelled)
                             }
                         } catch (e) { // This is still not official so lets be cautious about it
                             log.error "Error disarming ADT\n$e"
                             msg += ", error disarming ADT"
-                        }
+                        }*/
                     	break
                         
                     default:
-                        log.warn "Invalid SHM mode detected: ${data.armMode}"
-                        msg += ", invalid Smart Home Monitor mode ${data.armMode}"
+                        log.warn "Invalid keypad mode detected: ${data.armMode}"
+                        msg += ", invalid keypad mode ${data.armMode}"
                         break
                 }
             } else {
-                if (settings."homeDisarm${lockStr}${user}") {
+                /*if (settings."homeDisarm${lockStr}${user}") { // Sync SHM
                     log.info "Disarming Smart Home Monitor"
                     sendLocationEvent(name: "alarmSystemStatus", value: "off") // First do this to avoid false alerts from a slow platform
                     msg += detailedNotifications ? ", disarming Smart Home Monitor" : ""
-                }
+                }*/
                 
-                try {
+                /*try {
                     if (settings."adtDisarm${lockStr}${user}" && settings."adtDevices") {
                         log.info "Disarming ADT"
                         settings."adtDevices"?.disarm() // First do this to avoid false alerts from a slow platform
@@ -2519,7 +2545,7 @@ def processUnlockEvent(evt) {
                 } catch (e) { // This is still not official so lets be cautious about it
                     log.error "Error disarming ADT\n$e"
                     msg += ", error disarming ADT"
-                }
+                }*/
             }
 
             if (settings."homeMode${lockStr}${user}") {
@@ -2532,11 +2558,11 @@ def processUnlockEvent(evt) {
                 msg += detailedNotifications ? ", changing mode to ${settings."homeMode${lockStr}${user}"}" : ""
             }
 
-            if (settings."homePhrase${lockStr}${user}") {
+            /*if (settings."homePhrase${lockStr}${user}" && location.helloHome?.getPhrases()) {
                 log.info "$evt.displayName was unlocked successfully, running routine ${settings."homePhrase${lockStr}${user}"}"
                 location.helloHome.execute(settings."homePhrase${lockStr}${user}") // First do this to avoid false alerts from a slow platform
                 msg += detailedNotifications ? ", running routine ${settings."homePhrase${lockStr}${user}"}" : ""
-            }
+            }*/
 
             if (settings."turnOnSwitchesAfterSunset${lockStr}${user}") {
                 def cdt = new Date(now())
@@ -2617,7 +2643,6 @@ def processLockEvent(evt) {
     log.trace "Processing $lock lock event: $evt"
 
     def msgs = [] // Message to send
-    def lockStr = "" // Individual lock actions
     def user = "" // User slot used
     def i = 0 // Slot used
     
@@ -2662,39 +2687,42 @@ def processLockEvent(evt) {
     i = ((data?.usedCode ?: 0) as Integer) ?: (((data?.codeId ?: 0) as Integer) ?: 0) // get the user if present
     log.trace "$lock locked by user $user $lockMode"
 
-    // Check if we have user override unlock actions defined
-    if (user && !settings."userOverrideUnlockActions${user}") {
-        log.trace "Did not find per user lock actions, falling back to global lock actions"
-        user = ""
-    }
-
-    // Check if we have individual actions for each lock
-    if (settings."individualDoorActions${user}") {
-        lockStr = lock as String
-    } else {
-        lockStr = ""
-    }
-
     if ((["keypad", "rfid"].any { lockMode?.toLowerCase().contains(it) }) || user) { // LOCKED VIA KEYPAD/RFID
+        def name, notify, notifyCount, notifyModes, notifyXPresence, extLockNotify, extLockNotifyModes, userOverrideActions
+        
+        if (user) {
+            if (i == 0) {
+                name = "Master Code" // Special case locks like Yale have a master code which isn't programmable and is code 0
+                notify = true // always inform about master users
+                user = "" // Master code uses general actions
+            } else {
+                name = settings."userNames${i}" ?: "Unknown user" // Should have a name for the user otherwise it's unknown
+                notify = settings."userNotify${i}"
+                notifyCount = settings."userNotifyUseCount${i}"
+                notifyModes = settings."userNotifyModes${i}"
+                notifyXPresence = settings."userXNotifyPresence${i}"
+                userOverrideActions = settings."userOverrideUnlockActions${i}"
+
+                // Check if we have user override lock actions defined
+                if (!userOverrideActions) {
+                    log.trace "No user $name specific lock action found, falling back to general actions"
+                    user = "" // We don't have a user specific action defined, fall back to general actions
+                }
+            }
+        } else {
+            log.trace "No usercode found in extended data for external user lock"
+        }
+
+        // Check if we have individual actions for each lock
+        def lockStr = ""
+        if (settings."individualDoorActions${user}") {
+            lockStr = lock as String
+        } else {
+            lockStr = ""
+        }
+
         // Check if we have a delayed action and process accordingly
         if (settings."delayLockActionsTime${lockStr}${user}") {
-            def name, notify, notifyCount, notifyModes, notifyXPresence, extLockNotify, extLockNotifyModes
-            if (user) {
-                if (i == 0) {
-                    name = "Master Code" // Special case locks like Yale have a master code which isn't programmable and is code 0
-                    notify = true // always inform about master users
-                    user = "" // Master code uses general actions
-                } else {
-                    name = settings."userNames${i}" ?: "Unknown user" // Should have a name for the user otherwise it's unknown
-                    notify = settings."userNotify${i}"
-                    notifyCount = settings."userNotifyUseCount${i}"
-                    notifyModes = settings."userNotifyModes${i}"
-                    notifyXPresence = settings."userXNotifyPresence${i}"
-                }
-            } else {
-                log.trace "No usercode found in extended data for external user lock"
-            }
-
             extLockNotify = settings."externalLockNotify${lockStr}"
             extLockNotifyModes = settings."externalLockNotifyModes${lockStr}"
 
@@ -2710,14 +2738,14 @@ def processLockEvent(evt) {
                 msgs << msg
             }
             evt.sendNotifications = true // Since it's delayed we request notifications be sent
-            // If this came from a keypad and direct control for SHM is enabled, then start an exit code beep for all keypads with direct control
+            // If this came from a keypad and direct control is enabled, then start an exit code beep for all keypads with direct control
             if (data?.armMode) {
-                if (settings."keypadArmDisarm${lock}${""}" != false) { // If this keypad has direct control enabled
-                    def keypads = locks?.findAll{ it.hasAttribute("armMode") } // Get all keypads and sync state with SHM
+                if (settings."keypadArmDisarm${lock}${""}") { // If this keypad has direct control enabled
+                    def keypads = locks?.findAll{ it.hasAttribute("armMode") } // Get all keypads
                     // We don't check for individual user custom actions for keypads since synchronization needs to happen at the keypad level
-                    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}" != false) } : (settings."keypadArmDisarm${""}${""}" != false ? keypads : null)) // Get keypads with direct control enabled
+                    keypads = (settings."individualDoorActions${""}" ? keypads.findAll { keypad -> (settings."keypadArmDisarm${keypad}${""}") } : (settings."keypadArmDisarm${""}${""}" ? keypads : null)) // Get keypads with direct control enabled
                     if (keypads) {
-                        log.trace "Direct SHM controls enabled, starting exit delay beeping for $keypads"
+                        log.trace "Direct keypad controls enabled, starting exit delay beeping for $keypads"
                         keypads*.setExitDelay(settings."delayLockActionsTime${lockStr}${user}" * 60) // Start exit delay beeping for delayed actions with direct control enabled
                     }
                 }
@@ -2727,6 +2755,14 @@ def processLockEvent(evt) {
             msgs += processLockActions(evt) // Take the message back to send out
         }
     } else { // MANUAL LOCK
+        // Check if we have individual actions for each lock
+        def lockStr = ""
+        if (settings."individualDoorActions") {
+            lockStr = lock as String
+        } else {
+            lockStr = ""
+        }
+
         // Check if we have a delayed action and process accordingly
         if (settings."delayLockActionsTimeManual${lockStr}") {
             def msg = "$evt.displayName was locked $lockMode, checking for actions in ${settings."delayLockActionsTimeManual${lockStr}"} minutes" // Default message to send
@@ -2858,14 +2894,14 @@ def processLockActions(evt) {
                 }
             }
 
-            if ((settings."keypadArmDisarm${lockStr}${user}" != false) && data?.armMode) {
+            if ((settings."keypadArmDisarm${lockStr}${user}") && data?.armMode) {
                 switch (data.armMode) { // Set Keypad lock state
                     case "armedStay":
                     case "armedNight":
-                    	log.info "Arming Smart Home Monitor to Stay"
-                        sendLocationEvent(name: "alarmSystemStatus", value: "stay")
-                        msg += detailedNotifications ? ", Arming Smart Home Monitor to Stay" : ""
-                        try {
+                    	/*log.info "Arming Smart Home Monitor to Stay"
+                        sendLocationEvent(name: "alarmSystemStatus", value: "stay") // Sync SHM
+                        msg += detailedNotifications ? ", Arming Smart Home Monitor to Stay" : ""*/
+                        /*try {
                             if (settings."adtDevices") {
                                 log.info "Arming ADT to Stay"
                                 settings."adtDevices"?.armStay('armedStay')
@@ -2874,14 +2910,14 @@ def processLockActions(evt) {
                         } catch (e) { // This is still not official so lets be cautious about it
                             log.error "Error arming ADT to Stay\n$e"
                             msg += ", error arming ADT to Stay"
-                        }
+                        }*/
                     	break
                     
                     case "armedAway":
-                    	log.info "Arming Smart Home Monitor to Away"
-                        sendLocationEvent(name: "alarmSystemStatus", value: "away")
-                        msg += detailedNotifications ? ", Arming Smart Home Monitor to Away" : ""
-                        try {
+                    	/*log.info "Arming Smart Home Monitor to Away"
+                        sendLocationEvent(name: "alarmSystemStatus", value: "away") // Sync SHM
+                        msg += detailedNotifications ? ", Arming Smart Home Monitor to Away" : ""*/
+                        /*try {
                             if (settings."adtDevices") {
                                 log.info "Arming ADT to Away"
                                 settings."adtDevices"?.armAway('armedAway')
@@ -2890,16 +2926,16 @@ def processLockActions(evt) {
                         } catch (e) { // This is still not official so lets be cautious about it
                             log.error "Error arming ADT to Away\n$e"
                             msg += ", error arming ADT to Away"
-                        }
+                        }*/
                     	break
                         
                     default:
-                        log.warn "Invalid SHM mode detected: ${data.armMode}"
-                    	msg += ", invalid Smart Home Monitor mode ${data.armMode}"
+                        log.warn "Invalid keypad mode detected: ${data.armMode}"
+                    	msg += ", invalid keypad mode ${data.armMode}"
                         break
                 }
             } else {
-                if (settings."homeArm${lockStr}${user}") {
+                /*if (settings."homeArm${lockStr}${user}") { // Sync SHM
                     if (settings."homeArmStay${lockStr}${user}") {
                         log.info "Arming Smart Home Monitor to Stay"
                         sendLocationEvent(name: "alarmSystemStatus", value: "stay")
@@ -2909,9 +2945,9 @@ def processLockActions(evt) {
                         sendLocationEvent(name: "alarmSystemStatus", value: "away")
                         msg += detailedNotifications ? ", Arming Smart Home Monitor to Away" : ""
                     }
-                }
+                }*/
                 
-                try {
+                /*try {
                     if (settings."adtArm${lockStr}${user}" && settings."adtDevices") {
                         if (settings."homeArmStay${lockStr}${user}") {
                             log.info "Arming ADT to Stay"
@@ -2926,7 +2962,7 @@ def processLockActions(evt) {
                 } catch (e) { // This is still not official so lets be cautious about it
                     log.error "Error arming ADT\n$e"
                     msg += ", error arming ADT"
-                }
+                }*/
             }
 
             if (settings."externalLockMode${lockStr}${user}${arm}") {
@@ -2939,11 +2975,11 @@ def processLockActions(evt) {
                 msg += detailedNotifications ? ", changing mode to ${settings."externalLockMode${lockStr}${user}${arm}"}" : ""
             }
 
-            if (settings."externalLockPhrase${lockStr}${user}${arm}") {
+            /*if (settings."externalLockPhrase${lockStr}${user}${arm}" && location.helloHome?.getPhrases()) {
                 log.info "$evt.displayName was locked successfully, running routine ${settings."externalLockPhrase${lockStr}${user}${arm}"}"
                 location.helloHome.execute(settings."externalLockPhrase${lockStr}${user}${arm}")
                 msg += detailedNotifications ? ", running ${settings."externalLockPhrase${lockStr}${user}${arm}"}" : ""
-            }
+            }*/
 
             if (settings."externalLockTurnOnSwitches${lockStr}${user}${arm}") {
                 log.info "$evt.displayName was locked successfully, turning on switches ${settings."externalLockTurnOnSwitches${lockStr}${user}${arm}"}"
@@ -3009,22 +3045,28 @@ def processLockActions(evt) {
         } else if (settings."runXModeLockActionsManual${lockStr}"?.find{it == location.mode}) {
             log.trace "Current mode is ${location.mode}, not running lock actions for door $lock"
         } else {
-            if (settings."homeArmManual${lockStr}") {
+            /*if (settings."homeArmManual${lockStr}") { // Sync SHM
                 log.info "Arming Smart Home Monitor to Stay"
                 sendLocationEvent(name: "alarmSystemStatus", value: "stay")
                 msg += detailedNotifications ? ", Arming Smart Home Monitor to Stay" : ""
-            }
+            }*/
 
-            try {
+            /*try {
                 if (settings."adtArmManual${lockStr}" && settings."adtDevices") {
-                    log.info "Arming ADT to Stay"
-                    settings."adtDevices"?.armStay('armedStay')
-                    msg += detailedNotifications ? ", Arming ADT to Stay" : ""
+                    if (settings."homeArmAwayManual${lockStr}") {
+                        log.info "Arming ADT to Away"
+                        settings."adtDevices"?.armAway('armedAway')
+                        msg += detailedNotifications ? ", Arming ADT to Away" : ""
+                    } else {
+                        log.info "Arming ADT to Stay"
+                        settings."adtDevices"?.armStay('armedStay')
+                        msg += detailedNotifications ? ", Arming ADT to Stay" : ""
+                    }
                 }
             } catch (e) { // This is still not official so lets be cautious about it
                 log.error "Error arming ADT to Stay\n$e"
                 msg += ", error arming ADT to Stay"
-            }
+            }*/
 
             if (settings."externalLockModeManual${lockStr}") {
                 log.info "Changing mode to ${settings."externalLockModeManual${lockStr}"}"
@@ -3036,11 +3078,11 @@ def processLockActions(evt) {
                 msg += detailedNotifications ? ", changing mode to ${settings."externalLockModeManual${lockStr}"}" : ""
             }
 
-            if (settings."externalLockPhraseManual${lockStr}") {
+            /*if (settings."externalLockPhraseManual${lockStr}" && location.helloHome?.getPhrases()) {
                 log.info "$evt.displayName was locked successfully, running routine ${settings."externalLockPhraseManual${lockStr}"}"
                 location.helloHome.execute(settings."externalLockPhraseManual${lockStr}")
                 msg += detailedNotifications ? ", running ${settings."externalLockPhraseManual${lockStr}"}" : ""
-            }
+            }*/
 
             if (settings."externalLockTurnOnSwitchesManual${lockStr}") {
                 log.info "$evt.displayName was locked successfully, turning on switches ${settings."externalLockTurnOnSwitchesManual${lockStr}"}"
@@ -3089,58 +3131,39 @@ def clearAllCodes() {
     
     def msgs = []
 
-    for (lock in locks) {
-        if (state.updateLockList.contains(lock.id)) { // this lock codes hasn't been completely initiated
-            //log.trace "Clearing codes for $lock"
-            while (state.updateNextCode <= maxUserNames) {
-                def i = state.updateNextCode
-                def user = state.updateNextCode as Integer // which user slot are we using
-                def name = settings."userNames${i}" // Get the name for the slot
-                def code = settings."userCodes${i}" // Get the code for the slot
-                def userLocks = (locks?.size() > 1) ? (settings."userLocks${i}" ?: locks*.id) : locks*.id // If not defined or only one lock then check all locks
-                
-                // ST can't clear too many codes at once, so lets prioritize since this is a fresh install of the app
-                // If we are adding a code to the slot then clear it here, otherwise mark the previous code as populated so the app will clear it eventually
-                if (code && userLocks?.contains(lock.id)) {
-                    deleteCode(lock, user) // Delete the user
-                    def msg = "Requesting $lock to clear user $user ${name ?: ""}"
-                    log.debug msg
-                } else {
-                    state.lockCodes[lock.id][user as String] = "1" // Indicate (special) previous code so the app will clear it later
-                }
-                
-                state.updateNextCode = state.updateNextCode + 1 // move onto the next code
-                
-                // Lets do this quickly with without waiting for the lock to delete each code since we are just clearing the DH database to have a fresh start, actual deleting would happen during initialization
-                //startTimer(5, clearAllCodes) // It takes the lock about 5 seconds to clear each code and get a response (give lock time to finish up programming actions)
+    if ((maxUserNames != null) && ((maxUserNames as Integer) > 0)) { // Clear all users
+        log.debug "Clearing user slots 1 to ${maxUserNames}"
+        startTimer(1, removeUsersOffline, [ data : [start: 1, end: (maxUserNames as Integer)] ]) // Clear the slots
 
-                // Last thing to do since it could timeout
-                //detailedNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
-                //return // We are done here, exit out as we've scheduled the next update
+        for (lock in locks) {
+            def msg = "Marking first ${maxUserNames} users to be cleared from ${lock}"
+            def user = 1
+            while (user <= maxUserNames) {
+                // ST can't clear too many codes at once, so lets mark the previous code as populated so the app will clear it eventually
+                state.lockCodes[lock.id][user as String] = "1" // Indicate (special) previous code so the app will clear it later
+                user++
             }
-
-            state.updateLockList.remove(lock.id) // we are done with this lock
-            state.updateNextCode = 1 // reset back to 1 for the next lock
-            //log.trace "$lock id $lock.id code clearing complete, unprocessed locks ${state.updateLockList}, reset next code update to $state.updateNextCode"
-
-            msgs << "Clearing all codes from lock $lock"
+            
+            //log.trace msg
+            //msgs << msg
         }
-    }
-    
-    state.clearCodes = false // We're done with the initialization
-    state.updateLockList = []
-    for (lock in locks) {
-        state.updateLockList.add(lock.id) // reset the state for each lock to be processed with initialize
-        //log.trace "Added $lock id ${lock.id} to unprocessed locks update list ${state.updateLockList}"
-    }
 
-    msgs << "Starting code programming in 15 seconds"
-    log.trace msgs?.last()
-    startTimer(15, kickStart) // It takes the lock about 15 seconds to clear the codes and finish up pending commands
+        def totalClearingTime = ((((locks?.size() ?: 0) * (maxUserNames as Integer) * (sendDelay ?: 5)) / 60) as Integer) + 1
+        if (totalClearingTime) {
+            def msg = "${app.label} may take about ${totalClearingTime} minutes to clear the users from the locks"
+            log.debug msg
+            msgs << msg
+        }
+    } // Clear excess users offline so it doesn't slow down the UI (do it while reducing users so that when you increase the slots are already cleared)
+    
+    deleteSetting("clearUserCodes") // We're done with clearing - reset it
+
+    startTimer(1, kickStart) // It takes the lock about 15 seconds to clear the codes and finish up pending commands
 
     // Last thing to do since it could timeout
     for (msg in msgs) {
-        detailedNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+        //log.trace msg
+        sendNotifications(msg)
     }
 }
 
@@ -3210,13 +3233,14 @@ def codeCheck() {
                 if (!userLocks?.contains(lock.id)) {
                     if (state.lockCodes[lock.id].(user as String)) {
                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                            log.warn msg
                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                 extraNotifications = true // We need to inform the user
                             } else {
                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                msg = "" // Don't message endlessly
                             }
-                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                            log.warn msg
                         } else {
                             deleteCode(lock, user)
                             msg = "Requesting $lock to delete unconfigured user $user ${name ?: ""}"
@@ -3228,7 +3252,7 @@ def codeCheck() {
                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
                         
                         // Last thing to do since it could timeout
-                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                         return // We are done here, exit out as we've scheduled the next update
                     } else {
                         log.debug "$lock ${name ?: ""} user $user already unconfigured"
@@ -3280,13 +3304,14 @@ def codeCheck() {
                                 if (doAdd) {
                                     if (state.lockCodes[lock.id].(user as String) != code) { // Only if code has changed
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             setCode(lock, user, code, name)
                                             log.debug msg
@@ -3297,7 +3322,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     } else {
                                         if (getCodeName(lock, user) && (getCodeName(lock, user) != name)) { // If the username has changed update it, if it's empty ignore it
@@ -3308,13 +3333,14 @@ def codeCheck() {
                                 } else {
                                     if (state.lockCodes[lock.id].(user as String)) {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             deleteCode(lock, user)
                                             msg = msg ?: "Requesting $lock to delete user invalid $user ${name ?: ""}"
@@ -3326,7 +3352,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     } else {
                                         log.debug "$lock User $user $name is already deleted"
@@ -3334,13 +3360,14 @@ def codeCheck() {
                                 }
                             } else if (state.lockCodes[lock.id].(user as String)) { // Code is null but the list shows programmed, i.e. we were asked to explicit send a delete command to the lock
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete user $user ${name ?: ""}"
@@ -3352,7 +3379,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user already deleted"
@@ -3367,13 +3394,14 @@ def codeCheck() {
                                     }
 
                                     if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                        msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                        log.warn msg
                                         if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                             extraNotifications = true // We need to inform the user
                                         } else {
                                             state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                            msg = "" // Don't message endlessly
                                         }
-                                        msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                        log.warn msg
                                     } else {
                                         deleteCode(lock, user)
                                         msg = "Requesting $lock to delete one time user $user ${name ?: ""}"
@@ -3385,18 +3413,19 @@ def codeCheck() {
                                     startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                     // Last thing to do since it could timeout
-                                    extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                    (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                     return // We are done here, exit out as we've scheduled the next update
                                 } else if (!state.trackUsedOneTimeCodes.contains(user as String)) { // If it's not been used add it to the lock
                                     if (state.lockCodes[lock.id].(user as String) != code) { // Only if code has changed
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             setCode(lock, user, code, name)
                                             msg = "Requesting $lock to add one time user $user ${name ?: ""}, code: $code"
@@ -3408,7 +3437,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     } else {
                                         if (getCodeName(lock, user) && (getCodeName(lock, user) != name)) { // If the username has changed update it, if it's empty ignore it
@@ -3421,13 +3450,14 @@ def codeCheck() {
                                 }
                             } else if (state.lockCodes[lock.id].(user as String)) { // Code is null but the list shows programmed, i.e. we were asked to explicit send a delete command to the lock
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete user $user ${name ?: ""}"
@@ -3439,7 +3469,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user already deleted"
@@ -3469,13 +3499,14 @@ def codeCheck() {
                                         log.debug "$lock scheduled user $user $name is already active, not adding again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             setCode(lock, user, code, name)
                                             msg = "Requesting $lock to add active scheduled user $user ${name ?: ""}, code: $code"
@@ -3487,7 +3518,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 } else { // Outside operating schedule
@@ -3495,13 +3526,14 @@ def codeCheck() {
                                         log.debug "$lock scheduled user $user $name is already inactive, not removing again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             deleteCode(lock, user)
                                             msg = "Requesting $lock to delete inactive scheduled user $user ${name ?: ""}"
@@ -3513,19 +3545,20 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 }
                             } else if (state.lockCodes[lock.id].(user as String)) { // Code is null but the list shows programmed, i.e. we were asked to explicit send a delete command to the lock
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete user $user ${name ?: ""}"
@@ -3537,7 +3570,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user already deleted"
@@ -3548,13 +3581,14 @@ def codeCheck() {
                             if (code != null) {
                                 if (state.lockCodes[lock.id].(user as String) != code) { // Only if code has changed
                                     if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                        msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                        log.warn msg
                                         if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                             extraNotifications = true // We need to inform the user
                                         } else {
                                             state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                            msg = "" // Don't message endlessly
                                         }
-                                        msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                        log.warn msg
                                     } else {
                                         setCode(lock, user, code, name)
                                         msg = "Requesting $lock to add permanent user $user ${name ?: ""}, code: $code"
@@ -3566,23 +3600,24 @@ def codeCheck() {
                                     startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                     // Last thing to do since it could timeout
-                                    extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                    (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                     return // We are done here, exit out as we've scheduled the next update
                                 } else {
                                     if (getCodeName(lock, user) && (getCodeName(lock, user) != name)) { // If the username has changed update it, if it's empty ignore it
-                                            updateCodeName(lock, user, name)
+                                        updateCodeName(lock, user, name)
                                     }
                                     log.debug "$lock User $user $name is a permanent code and is already active"
                                 }
                             } else if (state.lockCodes[lock.id].(user as String)) { // Code is null but the list shows programmed, i.e. we were asked to explicit send a delete command to the lock
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete user $user ${name ?: ""}"
@@ -3594,7 +3629,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user already deleted"
@@ -3626,13 +3661,14 @@ def codeCheck() {
                                         log.debug "$lock presence user $user $name is already active, not adding again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             setCode(lock, user, code, name)
                                             msg = "Requesting $lock to add presence based user $user ${name ?: ""}, code: $code"
@@ -3644,7 +3680,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 } else { // Presence conditions not satisfied
@@ -3652,13 +3688,14 @@ def codeCheck() {
                                         log.debug "$lock presence user $user $name is already inactive, not removing again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             deleteCode(lock, user)
                                             msg = "Requesting $lock to delete presence based user $user ${name ?: ""}"
@@ -3670,7 +3707,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 }
@@ -3699,13 +3736,14 @@ def codeCheck() {
                                         log.debug "$lock mode user $user $name is already active, not adding again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} addition not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             setCode(lock, user, code, name)
                                             msg = "Requesting $lock to add mode based user $user ${name ?: ""}, code: $code"
@@ -3717,7 +3755,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 } else { // Mode conditions not satisfied
@@ -3725,13 +3763,14 @@ def codeCheck() {
                                         log.debug "$lock mode user $user $name is already inactive, not removing again"
                                     } else {
                                         if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                            log.warn msg
                                             if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                                 extraNotifications = true // We need to inform the user
                                             } else {
                                                 state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                                msg = "" // Don't message endlessly
                                             }
-                                            msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                            log.warn msg
                                         } else {
                                             deleteCode(lock, user)
                                             msg = "Requesting $lock to delete mode based user $user ${name ?: ""}"
@@ -3743,7 +3782,7 @@ def codeCheck() {
                                         startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                         // Last thing to do since it could timeout
-                                        extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                        (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                         return // We are done here, exit out as we've scheduled the next update
                                     }
                                 }
@@ -3753,13 +3792,14 @@ def codeCheck() {
                         case 'Inactive':
                             if (state.lockCodes[lock.id].(user as String)) { // Delete the code is hasn't been deleted
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete inactive user $user ${name ?: ""}"
@@ -3771,7 +3811,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user already inactive"
@@ -3781,13 +3821,14 @@ def codeCheck() {
                         default: // No user type selected, it's empty delete code
                             if (state.lockCodes[lock.id].(user as String)) { // Delete the code is hasn't been deleted
                                 if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                                    log.warn msg
                                     if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                                         extraNotifications = true // We need to inform the user
                                     } else {
                                         state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                                        msg = "" // Don't message endlessly
                                     }
-                                    msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                                    log.warn msg
                                 } else {
                                     deleteCode(lock, user)
                                     msg = "Requesting $lock to delete empty user $user ${name ?: ""}"
@@ -3799,7 +3840,7 @@ def codeCheck() {
                                 startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                                 // Last thing to do since it could timeout
-                                extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                                (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                                 return // We are done here, exit out as we've scheduled the next update
                             } else {
                                 log.debug "$lock ${name ?: ""} user $user is empty, code already deleted"
@@ -3818,13 +3859,14 @@ def codeCheck() {
                 def user = i as Integer
                 if (user > maxUserNames) { // This is an excess code, clean it up
                     if ((state.retryCodeCount[lock.id][user as String] = (state.retryCodeCount[lock.id][user as String] ?: 0) + 1) > (maxRetries + 1)) {
+                        msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
+                        log.warn msg
                         if (state.retryCodeCount[lock.id][user as String] == (maxRetries + 2)) { // Only process it once until reset
                             extraNotifications = true // We need to inform the user
                         } else {
                             state.retryCodeCount[lock.id][user as String] = (maxRetries + 3) // Fix it so when maxRetries changes, it'll pick it up
+                            msg = "" // Don't message endlessly
                         }
-                        msg = "Retry programming exceeded, user $user ${name ?: ""} deletion not confirmed by lock $lock"
-                        log.warn msg
                     } else {
                         deleteCode(lock, user)
                         msg = "Requesting $lock to delete excess user $user ${name ?: ""}"
@@ -3835,7 +3877,7 @@ def codeCheck() {
                     startTimer((sendDelay ?: defaultSendDelay), codeCheck) // schedule the next code update after a few seconds otherwise it overloads locks and doesn't work
 
                     // Last thing to do since it could timeout
-                    extraNotifications ? sendNotifications(msg) : sendNotificationEvent(msg)
+                    (extraNotifications && msg) ? sendNotifications(msg) : sendNotificationEvent(msg)
                     return true// We are done here, exit out as we've scheduled the next update
                 }
             }) { // If had a match then exit as we've scheduled the next iteration

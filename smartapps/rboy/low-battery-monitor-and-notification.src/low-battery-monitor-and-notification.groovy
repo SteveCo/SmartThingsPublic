@@ -20,12 +20,13 @@
 * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
 */ 
 
-def clientVersion() { return "01.06.01" }
+def clientVersion() { return "01.07.00" }
 
 /**
  *  Low Battery Monitor and Notification
  *
  * Copyright RBoy Apps, redistribution of any changes or code is not allowed without permission
+ * 2020-10-27 - (v01.07.00) Added option to display battery status in summary page and also in rule page
  * 2020-07-29 - (v01.06.01) New app/platform improvements
  * 2020-05-04 - (v01.05.02) Try to detect platform outage and prevent code upgrade spam notifications
  * 2020-01-20 - (v01.05.01) Update icons for broken ST Android app 2.18
@@ -55,6 +56,7 @@ preferences {
     page(name: "loginPage2")
     page(name: "setupApp")
     page(name: "newMonitorRulePage")
+    page(name: "displayBatteryPage")
 }
 
 private getSchedulingOptions() {
@@ -164,6 +166,10 @@ def setupApp() {
             ]
             href(name: "NewMonitorRule", params: hrefParams, title: "+ Add a new battery monitor rule", page: "newMonitorRulePage", description: "", required: false)
         }
+        
+        section("Battery Status") {
+            href(name: "DisplayBatteryPage", title: "Show battery summary", page: "displayBatteryPage", description: "", required: false, image: "https://www.rboyapps.com/images/BatteryLevel.png")
+        }
 
         section("Notification Options") {
             input "time", "time", title: "Check battery levels at this time everyday", required: true, image: "https://www.rboyapps.com/images/Time.png"
@@ -222,7 +228,7 @@ def newMonitorRulePage(params) {
     }
 
     dynamicPage(name:"newMonitorRulePage", title: "Battery monitor rule", uninstall: false, install: false) {
-        section {
+        section() {
             log.trace "RulePage Rules:" + atomicState.rules
             
             def upper = settings."batteryUpper${rule.index}"
@@ -262,6 +268,44 @@ def newMonitorRulePage(params) {
                 input "name${rule.index}", "text", title: "Name this rule (optional)", required: false, submitOnChange: true
                 input "deleteRule${rule.index}", "bool", title: "Delete this rule", required: false, submitOnChange: true
             }
+        }
+        
+        section("Device battery status") {
+            def statuses = []
+            def threshold = settings."batteryUpper${rule.index}"
+            for (device in settings."monitorDevices${rule.index}") {
+                def batteryLevel = device.currentValue("battery") as Integer
+                statuses << [ name: device.displayName, batteryLevel: batteryLevel, threshold: threshold, replace: ((batteryLevel != null) && (batteryLevel < threshold)) ]
+            }
+            
+            statuses.sort{ a, b -> !a.replace <=> !b.replace ?: (a.batteryLevel ?: 0) <=> (b.batteryLevel ?: 0) ?: a.name <=> b.name } // Sort them by replace first, then battery level and then by name, replace followed by null at the top
+            
+            for (status in statuses) {
+                paragraph ("${status.batteryLevel == null ? "Unknown" : status.batteryLevel + "%"} - ${status.name}" + (status.replace ? " (REPLACE)" : ""), image: status.replace ? "https://www.rboyapps.com/images/BatteryAlert.png" : "")
+            }            
+        }
+    }
+}
+
+def displayBatteryPage() {
+    log.trace "Battery status page"
+
+    dynamicPage(name:"displayBatteryPage", title: "Battery status summary", uninstall: false, install: false) {
+        section() {
+            def statuses = []
+            for (rule in atomicState.rules) {            
+                def threshold = settings."batteryUpper${rule.index}"
+                for (device in settings."monitorDevices${rule.index}") {
+                    def batteryLevel = device.currentValue("battery") as Integer
+                    statuses << [ name: device.displayName, batteryLevel: batteryLevel, threshold: threshold, replace: ((batteryLevel != null) && (batteryLevel < threshold)) ]
+                }
+            }
+            
+            statuses.sort{ a, b -> !a.replace <=> !b.replace ?: (a.batteryLevel ?: 0) <=> (b.batteryLevel ?: 0) ?: a.name <=> b.name } // Sort them by replace first, then battery level and then by name, replace followed by null at the top
+            
+            for (status in statuses) {
+                paragraph ("${status.batteryLevel == null ? "Unknown" : status.batteryLevel + "%"} - ${status.name}" + (status.replace ? " (REPLACE)" : ""), image: status.replace ? "https://www.rboyapps.com/images/BatteryAlert.png" : "")
+            }            
         }
     }
 }

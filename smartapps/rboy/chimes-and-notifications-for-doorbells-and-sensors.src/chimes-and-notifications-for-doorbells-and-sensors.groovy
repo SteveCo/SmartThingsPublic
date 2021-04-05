@@ -20,14 +20,19 @@
  * The user assumes all responsibility for selecting the software and for the results obtained from the use of the software. The user shall bear the entire risk as to the quality and the performance of the software.
  */ 
 
-def clientVersion() {
-    return "01.05.04"
-}
+def clientVersion() { return "01.09.01" }
 
 /**
  * Chime and Notifications for Doorbells and Sensors
  *
  * Copyright RBoy Apps, redistribution, modification or reuse code is not allowed without permission
+ * 2021-01-14 - (v01.09.01) Improve description text
+ * 2020-10-26 - (v01.09.00) Added support for audio files/URL's
+ * 2020-09-29 - (v01.08.00) Added support for Garage door controllers
+ * 2020-07-29 - (v01.07.01) New app/platform improvements
+ * 2020-05-05 - (v01.06.02) Clarify repeat and after notifications and limit minimum value
+ * 2020-05-04 - (v01.06.01) Try to detect platform outage and prevent code upgrade spam notifications
+ * 2020-04-03 - (v01.06.00) Added option to skip first notification
  * 2020-03-20 - (v01.05.04) Fix for ST platform changes throwing an error on empty subscription
  * 2020-01-20 - (v01.05.03) Update icons for broken ST Android app 2.18
  * 2019-10-17 - (v01.05.02) Fix for push and silent notifications
@@ -56,8 +61,10 @@ definition(
 )
 
 preferences {
-    page(name: "landingPage")
     page(name: "initPage")
+    page(name: "loginPage")
+    page(name: "loginPage2")
+    page(name: "setupApp")
     page(name: "summaryPage")
     page(name: "mainPage")
     page(name: "doorbellPage")
@@ -69,8 +76,8 @@ preferences {
 private getIsParent() { !parent }
 private getIsParentInstalled() { state.parentInstalled }
 
-def landingPage(params) {
-    log.trace "Landing page isParent: $isParent, params: $params"
+def initPage(params) {
+    log.trace "Init page isParent: $isParent, params: $params"
     
     if (!isParent) {
         mainPage()
@@ -78,15 +85,57 @@ def landingPage(params) {
         if (isParentInstalled) {
             summaryPage()
         } else {
-            initPage()
+            loginPage()
         }
     }
 }
 
-def initPage() {
-    dynamicPage(name: "initPage", title: "Chimes & Notifications for Doorbells & Sensors v${clientVersion()}", install: true, uninstall: true) {
+def loginPage() {
+    log.trace "Login page"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage", "loginPage2")
+    }
+}
+
+def loginPage2() {
+    log.trace "Login page2"
+    if (!state.loginSuccess && username) {
+        loginCheck()
+    }
+    if (state.loginSuccess) {
+        setupApp()
+    } else {
+        state.sendUpdate = true
+        loginSection("loginPage2", "loginPage")
+    }
+}
+
+private loginSection(name, nextPage) {
+    dynamicPage(name: name, title: "Chimes & Notifications for Doorbells & Sensors v${clientVersion()}", install: state.loginSuccess, uninstall: true, nextPage: state.loginSuccess ? "" : nextPage) {
         section() {
-            paragraph "Tap Save to finish installing Chimes and Doorbells then open it from your SmartApps to configure it"
+            if (state.loginError) {
+                log.warn "Authenticating failed: ${state.loginError}"
+                paragraph title: "Login failed", image: "https://www.rboyapps.com/images/RBoyApps.png", required: true, "${state.loginError}"
+            } else {
+                log.debug "Check authentication credentials, Login: $username"
+                paragraph title: "Login", image: "https://www.rboyapps.com/images/RBoyApps.png", required: false, "Enter your RBoy Apps username\nYou can retrieve your username from www.rboyapps.com lost password page"
+            }
+
+            input name: "username", type: "text", title: "Username", capitalization: "none", submitOnChange: false, required: false
+        }
+    }
+}
+
+def setupApp() {
+    dynamicPage(name: "setupApp", title: "Chimes & Notifications for Doorbells & Sensors v${clientVersion()}", install: true, uninstall: true) {
+        section() {
+            paragraph "Tap 'Done' to finish installing Chimes and Doorbells then open it from your SmartApps page to configure it"
         }
     }
 }
@@ -99,6 +148,10 @@ def summaryPage() {
 
         section() {
             input "updateNotifications", "bool", title: "Check for app updates", defaultValue: true, required: false
+        }
+
+        section("Confidential", hideable: true, hidden: true) {
+            paragraph("RBoy Apps Username: " + (username?.toLowerCase() ?: "Unlicensed") + (state.loginSuccess ? "" : ", contact suppport"))
         }
     }
 }
@@ -139,6 +192,8 @@ def doorbellPage() {
             input "lockedLocks", "capability.lock", title: "Locked", multiple: true, required: false
             input "switchOn", "capability.switch", title: "Switched on", multiple: true, required: false
             input "switchOff", "capability.switch", title: "Switched off", multiple: true, required: false
+            input "openGarages", "capability.doorControl", title: "Garage doors opened", multiple: true, required: false
+            input "closeGarages", "capability.doorControl", title: "Garage doors closed", multiple: true, required: false
             input "motionOn", "capability.motionSensor", title: "Motion detected", multiple: true, required: false
             input "waterSensors", "capability.waterSensor", title: "Water detected", multiple: true, required: false
             input "smokeSensors", "capability.smokeDetector", title: "Smoke detected", multiple: true, required: false
@@ -207,7 +262,17 @@ def notificationsPage() {
         }
 
         section("Notifications") {
-            input "audioDevices", "capability.audioNotification", title: "Speak notifications on", required: false, multiple: true, submitOnChange: true, image: "https://www.rboyapps.com/images/Horn.png"
+            input "repeatNotification", "number", title: "Notify every (minutes)", description: "Delay for initial or repeat notifications", range: "1..*", required: false, submitOnChange: true
+            if (repeatNotification) {
+                input "skipFirstNotification", "bool", title: "...start notifying after ${repeatNotification} minutes", description: "Skip the first notification", required: false
+            }
+            input "audioMessage", "enum", title: "Audio notification type", description: "Speak", options: getAudioOptions(), required: false, submitOnChange: true
+            if (audioMessage) {
+                if (audioMessage == "Custom Audio URL") {
+                    input "audioURL", "text", title: "...custom audio url", capitalization: "none", required: true
+                }
+            }
+            input "audioDevices", "capability.audioNotification", title: "Speak/play notifications on", required: getAudioUri(audioMessage, audioURL)?.uri ? true : false, multiple: true, submitOnChange: true, image: "https://www.rboyapps.com/images/Horn.png"
             if (audioDevices) {
                 input "audioVolume", "number", title: "...at this volume level (optional)", description: "keep current", required: false, range: "1..100"
             }
@@ -216,14 +281,92 @@ def notificationsPage() {
                 if (!push) {
                     input "silentPush", "bool", title: "Silent notifications", required: false, image: "https://www.rboyapps.com/images/SilentNotification.png"
                 }
-                input "sms", "phone", title: "Send SMS notification to", required: false, image: "https://www.rboyapps.com/images/Notifications.png"
-                paragraph "You can enter multiple phone numbers by separating them with a '*'. E.g. 5551234567*+18747654321"
+                paragraph "You can enter multiple phone numbers by separating them with a '*'. E.g. 5551234567*+18747654321", image: "https://www.rboyapps.com/images/Notifications.png"
+                input "sms", "phone", title: "Send SMS notification to", required: false
             }
-            input "textMessage", "text", title: "Use custom notification message", capitalization: "sentences", required: false
             paragraph "You can use the following custom labels in your message:\n<name> for triggering device name\n<rule> for rule name\n<status> for device status"
-            input "repeatNotification", "number", title: "Repeat notifications every (minutes)", required: false
+            input "textMessage", "text", title: "Use custom notification message", capitalization: "sentences", required: false
         }
     }
+}
+
+// Audio options
+private getAudioOptions() {
+    [
+        "Bell 1",
+        "Bell 2",
+        "Dogs Barking",
+        "Fire Alarm",
+        "The mail has arrived",
+        "A door opened",
+        "There is motion",
+        "Smartthings detected a flood",
+        "Smartthings detected smoke",
+        "Someone is arriving",
+        "Piano",
+        "Lightsaber",
+        "Custom Audio URL",
+        "Speak",
+        //"None",
+        //"Custom message",
+    ]
+}
+
+// Return a map of uri and duration for message type or converts a text message to an audio message with a uri and duration
+private getAudioUri(target, message) {
+    def sound = [:]
+    switch (target) {
+        case "Bell 1":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/bell1.mp3", duration: "10"]
+            break
+        case "Bell 2":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/bell2.mp3", duration: "10"]
+            break
+        case "Dogs Barking":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/dogs.mp3", duration: "10"]
+            break
+        case "Fire Alarm":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/alarm.mp3", duration: "17"]
+            break
+        case "The mail has arrived":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/the+mail+has+arrived.mp3", duration: "1"]
+            break
+        case "A door opened":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/a+door+opened.mp3", duration: "1"]
+            break
+        case "There is motion":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/there+is+motion.mp3", duration: "1"]
+            break
+        case "Smartthings detected a flood":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/smartthings+detected+a+flood.mp3", duration: "2"]
+            break
+        case "Smartthings detected smoke":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/smartthings+detected+smoke.mp3", duration: "1"]
+            break
+        case "Someone is arriving":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/someone+is+arriving.mp3", duration: "1"]
+            break
+        case "Piano":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/piano2.mp3", duration: "10"]
+            break
+        case "Lightsaber":
+            sound = [uri: "http://s3.amazonaws.com/smartapp-media/sonos/lightsaber.mp3", duration: "10"]
+            break
+        case "Custom Audio URL":
+            sound = [uri: message, duration: "0"]
+            break
+        case "Custom message":
+            if (message) {
+                sound = textToSpeech(message) // No translations at this time
+            } else {
+                log.warn "No text message provided"
+            }
+            break
+        default:
+            break
+    }
+    
+    return sound
 }
 
 private anySchedule() {
@@ -287,9 +430,18 @@ def scheduleCodesPage(params) {
     }
 }
 
+def uninstalled() {
+    log.info "Uninstalled called"
+    if (isParent) {
+        authUpdate("uninstall")
+    }
+}
+
 def installed() {
 	log.debug "INSTALLED with $settings"
     if (isParent) {
+        authUpdate("install")
+        state.sendUpdate = false
         initializeParent()
     } else {
         initialize()
@@ -299,6 +451,10 @@ def installed() {
 def updated() {
 	log.debug "UPDATED with $settings"
     if (isParent) {
+        if (state.sendUpdate) {
+            authUpdate("update")
+            state.sendUpdate = false
+        }
         initializeParent()
     } else {
         initialize()
@@ -308,10 +464,10 @@ def updated() {
 // PARENT STUFF
 def initializeParent(data = [:]) {
     log.trace "Initializing parent: $isParent"
-    if (state.clientVersion != clientVersion()) {
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
         def msg = "${app.label} detected version upgrade, reinitializing all rules"
         log.warn msg
-        sendPush(msg)
+        //sendPush(msg)
         getChildApps().each { child ->
             child.initialize(data)
         }
@@ -335,7 +491,7 @@ def appTouchParent(evt) {
     log.trace "appTouchParent: $isParent"
     
     // Check if we have a version upgrade
-    if (state.clientVersion != clientVersion()) {
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
         def msg = "${app.label} detected version upgrade, reinitializing"
         log.warn msg
         initializeParent([check: true]) // Notify
@@ -370,6 +526,8 @@ def initialize(data = [:]) {
     lockedLocks ? subscribe(lockedLocks, "lock.unknown", triggerHandler) : ""
     switchOn ? subscribe(switchOn, "switch.on", triggerHandler) : ""
     switchOff ? subscribe(switchOff, "switch.off", triggerHandler) : ""
+    openGarages ? subscribe(openGarages, "door.open", triggerHandler) : ""
+    closeGarages ? subscribe(closeGarages, "door.closed", triggerHandler) : ""    
     motionOn ? subscribe(motionOn, "motion.active", triggerHandler) : ""
     waterSensors ? subscribe(waterSensors, "water.wet", triggerHandler) : ""
     smokeSensors ? subscribe(smokeSensors, "smoke.detected", triggerHandler) : ""
@@ -388,11 +546,11 @@ def modeChangeHandler(evt) {
     log.trace "Mode change detected, triggering check for device states: name: $evt.name, value: $evt.value"
 
     // Check if we have a version upgrade
-    if (state.clientVersion != clientVersion()) {
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
         def msg = "${app.label} detected version upgrade, reinitializing all rules"
         log.warn msg
         parent.initializeParent([check: modeCheck]) // Check device states
-        sendNotifications(msg)
+        //sendPush(msg)
         return
     }
 
@@ -424,6 +582,8 @@ def checkDeviceStates(data = [:]) {
     	[ lockedLocks, "lock", ["locked","unknown"] ],
     	[ switchOn, "switch", ["on"] ],
     	[ switchOff, "switch", ["off"] ],
+        [ openGarages, "door", ["open"] ],
+        [ closeGarages, "door", ["closed"] ],
     	[ motionOn, "motion", ["active"] ],
     	[ tampers, "tamper", ["detected"] ],
     	[ smokeSensors, "smoke", ["detected"] ],
@@ -435,7 +595,7 @@ def checkDeviceStates(data = [:]) {
     checks.each { devs, attribute, states ->
         devs?.each { dev -> 
             if (states.contains(dev.currentValue(attribute))) { // Check if we have an event
-                def evt = [displayName: dev.displayName, name: attribute, value: dev.currentValue(attribute), data: [postText: (followUp ? " ${((now() - dev.latestState(attribute).date.getTime())/60/1000 + 0.5) as Integer} minutes ago" : postText)]] // If this is a follow up request, indicate how long it's been triggered
+                def evt = [displayName: dev.displayName, name: attribute, value: dev.currentValue(attribute), data: [postText: (followUp ? " ${((now() - dev.latestState(attribute).date.getTime())/60/1000 + 0.5) as Integer} minutes ago" : postText), followUp: followUp]] // If this is a follow up request, indicate how long it's been triggered
                 //log.trace "Found active device state: $evt"
                 evts << evt
             }
@@ -454,11 +614,11 @@ def triggerHandler(evt) {
     def data = (evt?.data instanceof String) ? parseJson(evt?.data) : (evt?.data ?: [:])
 
     // Check if we have a version upgrade
-    if (state.clientVersion != clientVersion()) {
+    if (state.clientVersion && (state.clientVersion != clientVersion())) { // Check for platform outage (null)
         def msg = "${app.label} detected version upgrade, reinitializing all rules"
         log.warn msg
         parent.initializeParent([check: true]) // Check device states for this interrupted event
-        sendNotifications(msg)
+        //sendPush(msg)
         return
     }
 
@@ -565,8 +725,14 @@ def triggerHandler(evt) {
     
     def msg = textMessage ? textMessage.replaceAll("<name>", evt?.displayName).replaceAll("<rule>", app.label).replaceAll("<status>", status) : "${evt?.displayName} $status"
     msg = data?.postText ? (msg + " " + data?.postText) : msg // Prefix a postText if we have one
-    log.info msg
-    sendNotifications(msg) // In the end as it may timeout
+    if (data?.followUp || !repeatNotification || (repeatNotification && !skipFirstNotification)) { // Incase we need to skip initial notification
+        log.info msg
+        def uri = getAudioUri(audioMessage, audioURL)?.uri
+        log.trace "Custom Audio URL: $uri"
+        sendNotifications(msg, uri) // In the end as it may timeout
+    } else {
+        log.info "Skipping first notification: $msg"
+    }
 }
 
 // Checks if we are within the current operating scheduled
@@ -669,7 +835,7 @@ private void sendText(number, message) {
     }
 }
 
-private void sendNotifications(message) {
+private void sendNotifications(message, uri = null) {
 	if (!message) {
 		return
     }
@@ -687,18 +853,102 @@ private void sendNotifications(message) {
         }
     }
 
-    audioDevices?.each { audioDevice -> // Play audio notifications
-        if (audioDevice.hasCommand("playText")) { // Check if it supports TTS
-            if (audioVolume) { // Only set volume if defined as it also resumes playback
-                audioDevice.playTextAndResume(message, audioVolume)
+    if (uri && audioDevices) { // Play custom audio uri
+        if (audioVolume) { // Only set volume if defined as it also resumes playback
+            audioDevices*.playTrackAndResume(uri, audioVolume)
+        } else {
+            audioDevices*.playTrack(uri)
+        }
+    } else if (audioDevices) { // Audio notifications
+        audioDevices?.each { audioDevice -> // Play audio notifications
+            if (audioDevice.hasCommand("playText")) { // Check if it supports TTS
+                if (audioVolume) { // Only set volume if defined as it also resumes playback
+                    audioDevice.playTextAndResume(message, audioVolume)
+                } else {
+                    audioDevice.playText(message)
+                }
             } else {
-                audioDevice.playText(message)
+                if (audioVolume) { // Only set volume if defined as it also resumes playback
+                    audioDevice.playTrackAndResume(textToSpeech(message)?.uri, audioVolume) // No translations at this time
+                } else {
+                    audioDevice.playTrack(textToSpeech(message)?.uri) // No translations at this time
+                }
+            }
+        }
+    }
+}
+
+private loginCheck() {
+    log.trace "Login check"
+	
+    authUpdate("check") { resp ->
+        if (resp?.status == 401) { // Invalid username
+            state.loginError = "Invalid username" // No response from website - we should not be here
+            state.loginSuccess = false
+        } else if ((resp?.status == 200) && resp?.data) {
+            def ret = resp.data
+            if (ret?.Authenticated) {
+                state.loginError = ""
+                state.loginSuccess = true
+            } else {
+                state.loginError = ret?.Error
+                state.loginSuccess = false
             }
         } else {
-            if (audioVolume) { // Only set volume if defined as it also resumes playback
-                audioDevice.playTrackAndResume(textToSpeech(message)?.uri, audioVolume) // No translations at this time
-            } else {
-                audioDevice.playTrack(textToSpeech(message)?.uri) // No translations at this time
+            state.loginError = "Unable to authenticate license, please try again later" // No response from website - we should not be here
+            state.loginSuccess = false
+        }
+    }
+}
+
+private authUpdate(String action, Closure closure = null) {
+    if (!username) {
+    	return
+    }
+    
+    def params = [
+        uri: "https://auth.rboyapps.com/v1/license",
+        headers: [
+            Authorization: "Basic ${"${username?.trim()?.toLowerCase()}:${username?.trim()?.toLowerCase()}".getBytes().encodeBase64()}",
+        ],
+        body: [
+            AppId: app.id,
+            Timestamp: new Date(now()).format("yyyy-MM-dd'T'HH:mm:ssXXX", location.timeZone ?: TimeZone.getDefault()), // ISO_8601
+            State: action,
+            Username: username?.trim()?.toLowerCase(),
+            LocationId: location.id,
+            LocationName: location.name,
+            AccountId: app.accountId,
+            AppName: "Chimes and Notifications",
+            AppInstallName: app.label,
+            AppVersion: clientVersion(),
+        ]
+    ]
+    
+    log.trace "Calling AuthUpdate\n${params}"
+
+    try {
+        httpPostJson(params) { resp ->
+            /*resp?.headers.each {
+                log.trace "${it.name} : ${it.value}"
+            }
+            log.trace "response contentType: ${resp?.contentType}"*/
+            log.debug "response data: ${resp?.data}"
+            if (closure) {
+                closure(resp)
+            }
+        }
+    } catch (e) {
+        //log.error "Auth response:\n${e.response?.data}\n\n${e.response?.allHeaders}\n\n${e.response?.status}\n\n${e.response?.statusLine}\n\n$e"
+        if ("${e}"?.contains("HttpResponseException")) { // If it's a HTTP error with non 200 status
+            log.warn "Auth status: ${e?.response?.status}, response: ${e?.response?.statusLine}"
+            if (closure) {
+                closure(e?.response)
+            }
+        } else { // Some other error
+            log.error "Auth error: $e"
+            if (closure) {
+                closure(null)
             }
         }
     }
@@ -746,6 +996,8 @@ def checkForCodeUpdate(evt = null) {
                      lockedLocks,
                      switchOn,
                      switchOff,
+                     openGarages,
+                     closeGarages,
                      motionOn,
                      arrives,
                      leaves,
@@ -782,4 +1034,5 @@ def checkForCodeUpdate(evt = null) {
 }
 
 // THIS IS THE END OF THE FILE
+
 

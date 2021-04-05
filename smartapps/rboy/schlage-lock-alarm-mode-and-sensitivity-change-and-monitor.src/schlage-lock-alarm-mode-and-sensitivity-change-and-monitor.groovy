@@ -21,7 +21,7 @@
 */ 
 
 def clientVersion() {
-    return "02.02.02"
+    return "02.03.00"
 }
 
 /**
@@ -29,6 +29,7 @@ def clientVersion() {
  *
  * Author: RBoy Apps
  * Copyright RBoy Apps, modification, reuse or redistribution of code is not allowed without permission
+ * 2020-09-10 - (v02.03.00) Update for new ST app
  * 2020-01-20 - (v02.02.02) Update icons for broken ST Android app 2.18
  * 2018-05-08 - (v02.02.01) Increase delay between setting alarm mode and sensitity to 30 seconds to allow for mesh issues
  * 2018-04-05 - (v02.02.00) Updated subscrition to lock tamper alerts, check for automatic code upgrades
@@ -61,9 +62,9 @@ preferences {
     page(name: "mainPage")
     page(name: "presetsPage")
     page(name: "presetModePage")
-    page(name: "presetSHMPage")
-    page(name: "presetRoutinePage")
     page(name: "presetLockPage")
+    //page(name: "presetSHMPage")
+    //page(name: "presetRoutinePage")
 }
 
 def mainPage() {
@@ -79,17 +80,18 @@ def mainPage() {
                     paragraph title: msg, required: true, ""
                 }
             }
-            input "locks", "capability.lock", title:"Select Schlage Locks to Monitor", multiple:true, required:true, submitOnChange: true
+            input "locks", "capability.lock", title:"Select Schlage Locks to Monitor", multiple:true, required:true, submitOnChange: true, image: "https://www.rboyapps.com/images/HandleLock.png"
         }
 
-        section ("Event Based Alarm Settings"){
-            href(name: "toPresets", title: "Configure lock alarms", page: "presetsPage", description: "Use this page to configure lock Alarm Modes and Sensivity based on events", required: false)
+        section("Event Based Alarm Settings"){
+            href(name: "toPresets", title: "Configure lock alarm", page: "presetsPage", description: "Change lock Alarm Mode and Sensivity based on events", required: false, image: "https://www.rboyapps.com/images/SecurityOn.png")
         }
 
         section("Lock Alarm Monitoring and Actions (optional)") {
             def modes = getAlarmModes()
             def sensitives = getAlarmSensitives()
             paragraph "Monitor lock(s) alarm and take these actions when alarm is detected"
+            input name: "modeMonitor", title: "Monitor lock alarm when operating in following modes(s)", type: "mode", required: false, multiple: true
             input "alarms", "capability.alarm", title: "External alarm to turn on", multiple: true, required: false, submitOnChange: true
             if (alarms) {
                 input "alarmSilent", "bool", title: "...silent external alarm", description: "Enables only strobe light (if supported by device)", required: false
@@ -99,11 +101,10 @@ def mainPage() {
                 input "lightTimer", "number", title: "...turn off after (minutes)", description: "", required: false, range: "1..*"
             }
             input("recipients", "contact", title: "Send notifications to", multiple: true, required: false) {
-                paragraph "You can enter multiple phone numbers to send an SMS to by separating them with a '*'. E.g. 5551234567*+12157654321"
-                input name: "sms", title: "Send SMS notification to", type: "phone", required: false
+                paragraph "You can enter multiple phone numbers to send an SMS to by separating them with a '*'. E.g. 5551234567*2157654321"
+                input name: "sms", title: "Send SMS notification to", type: "phone", required: false, image: "https://www.rboyapps.com/images/Notifications.png"
                 input "push", "bool", title: "Send Push Notification", required: false
             }
-            input name: "modeMonitor", title: "Monitor lock alarm when operating in following modes(s)", type: "mode", required: false, multiple: true
         }
         
         section() {
@@ -121,8 +122,8 @@ def presetsPage() {
 
         section ("Events") {
             href(name: "toModes", title: "Mode based settings", page: "presetModePage", description: presetsModesDescription(), required: false)
-            href(name: "toSHM", title: "SHM based settings", page: "presetSHMPage", description: presetsSHMDescription(), required: false)
-            href(name: "toRoutines", title: "Routine based settings", page: "presetRoutinePage", description: presetsPhrasesDescription(), required: false)
+            //href(name: "toSHM", title: "SHM based settings", page: "presetSHMPage", description: presetsSHMDescription(), required: false)
+            //href(name: "toRoutines", title: "Routine based settings", page: "presetRoutinePage", description: presetsPhrasesDescription(), required: false)
             href(name: "toLocks", title: "Lock State based settings", page: "presetLockPage", description: presetsLocksDescription(), required: false)
         }
     }
@@ -215,8 +216,8 @@ private String presetsDescription() {
     def pieces = ""
     
     pieces += presetsModesDescription(pieces)
-    pieces += presetsSHMDescription(pieces)
-    pieces += presetsPhrasesDescription(pieces)
+    //pieces += presetsSHMDescription(pieces)
+    //pieces += presetsPhrasesDescription(pieces)
     pieces += presetsLocksDescription(pieces)
 
     return pieces
@@ -331,8 +332,8 @@ def initialize() {
 
     subscribe(location, "mode", modeChangeHandler)
     subscribe(locks, "tamper.detected", motionDetected)
-    subscribe(location, "routineExecuted", modeChangeHandler)
-    subscribe(location, "alarmSystemStatus" , modeChangeHandler)
+    //subscribe(location, "routineExecuted", modeChangeHandler)
+    //subscribe(location, "alarmSystemStatus" , modeChangeHandler)
     subscribe(locks, "lock", modeChangeHandler)
     
     // Check for new versions of the code
@@ -351,7 +352,7 @@ def heartBeat(evt) {
         def msg = "NOTE: ${app.label} detected a code upgrade. Updating configuration, please open the app and click on Save to re-validate your settings"
         log.warn msg
         runIn(1, initialize) // Reinitialize the app offline
-        sendPush(msg) // Do this in the end as it may timeout
+        //sendPush(msg) // Do this in the end as it may timeout
     }    
 }
 
@@ -362,7 +363,7 @@ def modeChangeHandler(evt) {
     def lockDevice = []
     switch (evt.name) {
     
-        case "routineExecuted": // this is a Routine Executed event handler
+        /*case "routineExecuted": // this is a Routine Executed event handler
         	def prefix = ""
         	mode = prefix + evt.displayName
         	log.debug "Routine Executed handler called, routine ${mode} was executed"
@@ -372,7 +373,7 @@ def modeChangeHandler(evt) {
         	def prefix = "shm"
         	mode = prefix + evt.value // start shm modes with shm to avoid conflict with modes
             log.debug "SHM mode was changed to ${evt.value}"
-            break
+            break*/
             
         case "lock": // This is Lock
         	def prefix = "lock"
@@ -535,3 +536,4 @@ def checkForCodeUpdate(evt) {
 }
 
 // THIS IS THE END OF THE FILE
+
